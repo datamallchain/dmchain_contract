@@ -1,0 +1,49 @@
+{
+  "version": "eosio::abi/1.0",
+  "types":[{
+      "new_type_name": "account_name",
+      "type": "name"
+  }],
+  "structs": [{
+      "name": "extended_symbol",
+      "base": "",
+      "fields": [
+        {"name":"sym",      "type":"symbol"},
+        {"name":"contract", "type":"account_name"}
+      ]
+    },{
+      "name": "repostats",
+      "base": "",
+      "fields": [
+        {"name":"repo_id", "type":"uint64"},
+        {"name":"owner", "type":"account_name"},
+        {"name":"balance","type":"extended_asset"},
+        {"name":"to_sym","type":"extended_symbol"},
+        {"name":"expiration","type":"time_point_sec"},
+        {"name":"update_at","type":"time_point_sec"}
+      ]
+    },{
+      "name": "repurchase",
+      "base": "",
+      "fields": [
+        {"name":"owner", "type":"account_name"},
+        {"name":"seed", "type":"uint64"}
+      ]
+    }
+  ],
+  "actions": [{
+      "name": "repurchase",
+      "type": "repurchase",
+      "ricardian_contract": ""
+  }],
+  "tables": [{
+      "name": "repospool",
+      "type": "repostats",
+      "index_type": "i64",
+      "key_names" : ["repo_id"],
+      "key_types" : ["uint64"]
+    }],
+  "ricardian_clauses": [],
+  "error_messages": [],
+  "abi_extensions": []
+}

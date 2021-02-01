@@ -1,0 +1,6 @@
+[submodule "eosio.wasmsdk"]
+	path = eosio.wasmsdk
+	url = https://github.com/EOSIO/eosio.wasmsdk.git
+[submodule "eosio.contracts"]
+	path = eosio.contracts
+	url = https://github.com/EOSIO/eosio.contracts.git
