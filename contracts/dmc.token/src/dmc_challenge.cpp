@@ -229,7 +229,7 @@ void token::arbitration(name sender, uint64_t order_id, const std::vector<char>&
     checksum256 pre_hash_data = sha256((char*)&copy_data[0], copy_data.size());
     auto pre_hash_bytes = pre_hash_data.extract_as_byte_array();
     checksum256 hash_data = sha256((char*)&pre_hash_bytes[0], pre_hash_bytes.size());
-    auto hash_bytes = hash_data.extract_as_byte_array();
+    auto hash_bytes = checksum_data.extract_as_byte_array();
     uint64_t id_tmp = challenge_iter->data_id;
 
     for (auto iter = cut_merkle.begin(); iter != cut_merkle.end(); iter++) {
@@ -244,6 +244,7 @@ void token::arbitration(name sender, uint64_t order_id, const std::vector<char>&
             mixed_hash.insert(mixed_hash.begin() + hash_bytes.size(), &(hash_bytes[0]), (&(hash_bytes[0])) + hash_bytes.size());
         }
         checksum_data = sha256((char*)&mixed_hash[0], mixed_hash.size());
+        hash_bytes = checksum_data.extract_as_byte_array();
         id_tmp /= 2;
     }
     check(checksum_data == challenge_iter->merkle_root, "merkle root mismatch!");
