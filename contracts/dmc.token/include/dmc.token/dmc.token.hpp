@@ -41,6 +41,7 @@ constexpr uint64_t default_order_service_epoch = 12 * week_sec;
 constexpr uint32_t identifying_code_mask = 0x3FFFFFF;
 constexpr uint64_t default_dmc_challenge_interval = day_sec;
 constexpr uint64_t default_phishing_interval = day_sec;
+constexpr double default_initial_price = 0.1;
 /**
  * the longest service time for bill / order
  * 24 weeks
@@ -68,7 +69,6 @@ constexpr uint64_t default_penalty_rate = 30;
 
 // for abo
 static const name abo_account = "dmfoundation"_n;
-
 
 enum e_order_state {
     OrderStateWaiting = 0,
@@ -146,6 +146,7 @@ public:
     };
 
 public:
+
     ACTION create(name issuer, asset max_supply);
 
     ACTION issue(name to, asset quantity, string memo);
@@ -170,12 +171,12 @@ public:
 
 public:
 
-    ACTION exchange(name owner, extended_asset quantity, extended_asset to, double price, name id, string memo);
+    void exchange(name owner, extended_asset quantity, extended_asset to, double price, name id, string memo);
 
     ACTION exdestroy(extended_symbol sym);
 
 public:
-
+ 
     ACTION exlocktrans(name from, name to, extended_asset quantity, time_point_sec expiration, time_point_sec expiration_to, string memo);
 
     ACTION exunlock(name owner, extended_asset quantity, time_point_sec expiration, string memo);
@@ -184,9 +185,9 @@ public:
 
 public:
 
-    ACTION addreserves(name owner, extended_asset token_x, extended_asset token_y);
+    void addreserves(name owner, extended_asset token_x, extended_asset token_y);
 
-    ACTION outreserves(name owner, extended_symbol x, extended_symbol y, double rate);
+    void outreserves(name owner, extended_symbol x, extended_symbol y, double rate);
 
 public:
 
@@ -194,11 +195,11 @@ public:
 
     ACTION unbill(name owner, uint64_t bill_id, string memo);
 
-    ACTION getincentive(name owner, uint64_t bill_id);
-
     ACTION setabostats(uint64_t stage, double user_rate, double foundation_rate, extended_asset total_release, time_point_sec start_at, time_point_sec end_at);
 
-    void order(name owner, name miner, uint64_t bill_id, extended_asset asset, extended_asset reserve, string memo, time_point_sec deposit_valid);
+    ACTION order(name owner, name miner, uint64_t bill_id, extended_asset asset, extended_asset reserve, string memo, time_point_sec deposit_valid);
+
+    ACTION setreserve(name owner, extended_asset dmc_quantity, extended_asset pst_quantity);
 
 public:
 
@@ -227,6 +228,8 @@ public:
     ACTION setdmcconfig(name key, uint64_t value);
 
     ACTION claimorder(name payer, uint64_t order_id);
+
+    ACTION claimdeposit(name payer, uint64_t order_id);
 
     ACTION addordasset(name sender, uint64_t order_id, extended_asset quantity);
 
@@ -258,7 +261,7 @@ private:
     extended_asset get_asset_by_amount(T amount, extended_symbol symbol);
 
     void uniswapdeal(name owner, extended_asset& market_from, extended_asset& market_to, extended_asset from, extended_asset to_sym, uint64_t primary, double price, name rampay);
-    
+
     extended_asset exchange_from_uniswap(extended_asset add_balance);
 
     extended_asset get_dmc_by_vrsi(extended_asset rsi_quantity);
@@ -407,8 +410,8 @@ public:
 
     TABLE currency_stats {
         asset supply; 
-        asset max_supply;
-        name issuer; 
+        asset max_supply; 
+        name issuer;
         asset reserve_supply;
 
         uint64_t primary_key() const { return supply.symbol.code().raw(); }
@@ -438,6 +441,27 @@ public:
     typedef eosio::multi_index<"swapmarket"_n, uniswap_market,
         indexed_by<"bysymbol"_n, const_mem_fun<uniswap_market, checksum256, &uniswap_market::get_key>>>
         swap_market;
+
+    TABLE inner_uniswap_market {
+        uint64_t primary;
+        extended_asset tokenx;
+        extended_asset tokeny;
+        uint64_t primary_key() const { return primary; }
+        
+        static checksum256 key(extended_symbol symbolx, extended_symbol symboly)
+        {
+            if (symbolx < symboly) {
+                auto swap = symbolx;
+                symbolx = symboly;
+                symboly = swap;
+            }
+            return checksum256::make_from_word_sequence<uint64_t>(symbolx.get_symbol().code().raw(), symbolx.get_contract().value, symboly.get_symbol().code().raw(), symboly.get_contract().value);
+        }
+        checksum256 get_key() const { return key(tokenx.get_extended_symbol(), tokeny.get_extended_symbol()); }
+    };
+    typedef eosio::multi_index<"innermarker"_n, inner_uniswap_market,
+        indexed_by<"bysymbol"_n, const_mem_fun<inner_uniswap_market, checksum256, &inner_uniswap_market::get_key>>>
+        inner_market;
 
     TABLE market_pool {
         name owner;
@@ -490,10 +514,11 @@ public:
         extended_asset remaining_release;
         time_point_sec start_at;
         time_point_sec end_at;
-        time_point_sec last_released_at;
+        time_point_sec last_user_released_at;
+        time_point_sec last_foundation_released_at;
 
         uint64_t primary_key() const { return stage; }
-        EOSLIB_SERIALIZE(abo_stats, (stage)(user_rate)(foundation_rate)(total_release)(remaining_release)(start_at)(end_at)(last_released_at))
+        EOSLIB_SERIALIZE(abo_stats, (stage)(user_rate)(foundation_rate)(total_release)(remaining_release)(start_at)(end_at)(last_user_released_at)(last_foundation_released_at))
     };
     typedef eosio::multi_index<"abostats"_n, abo_stats> abostats;
 
@@ -502,7 +527,7 @@ public:
         time_point_sec end_at;
         extended_asset remaining_release;
 
-        uint64_t primary_key() const { return uint64_t(start_at.sec_since_epoch()); }
+        uint64_t primary_key() const { return uint64_t(end_at.sec_since_epoch()); }
         EOSLIB_SERIALIZE(penalty_stats, (start_at)(end_at)(remaining_release))
     };
     typedef eosio::multi_index<"penaltystats"_n, penalty_stats> penaltystats;
@@ -534,7 +559,7 @@ public:
     typedef eosio::multi_index<"dmcconfig"_n, dmc_config> dmc_global;
 
     TABLE dmc_order {
-        uint64_t order_id;
+        uint64_t order_id; 
         name user; 
         name miner; 
         uint64_t bill_id;
@@ -552,6 +577,7 @@ public:
         extended_asset user_rsi;
         extended_asset deposit;
         time_point_sec deposit_valid;
+        time_point_sec cancel_date;
 
         uint64_t primary_key() const { return order_id; }
         static uint128_t get_state_id(OrderState state, uint64_t order_id)
@@ -660,6 +686,7 @@ public:
         uint64_t order_id;
         name miner;
         uint64_t bill_id;
+        double rate;
         std::vector<maker_lp_pool> lps;
         uint64_t primary_key() const { return order_id; }
     };
@@ -668,7 +695,6 @@ public:
 public:
     ACTION orderrec(dmc_order order_info, uint8_t type);
     ACTION challengerec(dmc_challenge challenge_info);
-    ACTION destorypst(name payer, uint64_t order_id);
 
 private:
     inline static name get_foundation(name issuer)
@@ -694,8 +720,7 @@ private:
     void update_order_asset(dmc_order& order, OrderState new_state, uint64_t claims_interval);
     void change_order(dmc_order& order, const dmc_challenge& challenge, time_point_sec current, uint64_t claims_interval, name payer);
     void update_order(dmc_order& order, const dmc_challenge& challenge, name payer);
-    void destory_pst(dmc_order& info, name payer);
-    extended_asset distribute_lp_pool(uint64_t order_id, extended_asset pledge, extended_asset challenge_pledge, name payer);
+    extended_asset distribute_lp_pool(uint64_t order_id, extended_asset pledge, extended_asset challenge_pledge, name payer, bool distribute_miner);
     void phishing_challenge();
 
 public:

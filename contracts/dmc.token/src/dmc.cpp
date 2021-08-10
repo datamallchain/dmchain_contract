@@ -106,12 +106,18 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
     while (order_tbl.find(order_id) != order_tbl.end()) {
         order_id += 1;
     }
+    
     dmc_makers maker_tbl(get_self(), get_self().value);
     auto maker_iter = maker_tbl.find(miner.value);
     check(maker_iter != maker_tbl.end(), "can't find maker pool");
-    auto miner_lock_dmc = extended_asset(user_to_pay.quantity.amount * maker_iter->current_rate, user_to_pay.get_extended_symbol());
+    // sub_stats(asset);
+    // change_pst(miner, -asset);
+    double benchmark_stake_rate = get_dmc_rate(maker_iter->benchmark_stake_rate);
+    double r = cal_current_rate(maker_iter->total_staked, miner);
+    auto miner_lock_dmc = extended_asset(user_to_pay.quantity.amount * r, user_to_pay.get_extended_symbol());
     maker_tbl.modify(maker_iter, owner, [&](auto& m) {
-        m.total_staked -= miner_lock_dmc;
+        m.current_rate = cal_current_rate(m.total_staked - miner_lock_dmc, miner);
+        //m.total_staked -= miner_lock_dmc;
     });
     dmc_order order_info = {
         .order_id = order_id,
@@ -131,7 +137,8 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
         .miner_rsi = extended_asset(0, rsi_sym),
         .user_rsi = extended_asset(0, rsi_sym),
         .deposit = user_to_deposit,
-        .deposit_valid = deposit_valid
+        .deposit_valid = deposit_valid,
+        .cancel_date =  time_point_sec()
     };
     order_tbl.emplace(owner, [&](auto& o) {
         o = order_info;
@@ -481,18 +488,6 @@ void token::liquidation(string memo)
     }
 }
 
-void token::getincentive(name owner, uint64_t bill_id)
-{
-    require_auth(owner);
-    uint64_t now_time_t = calbonus(owner, bill_id, owner);
-    bill_stats sst(get_self(), owner.value);
-    auto ust_idx = sst.get_index<"byid"_n>();
-    auto ust = ust_idx.find(bill_id);
-    ust_idx.modify(ust, get_self(), [&](auto& s) {
-        s.updated_at = time_point_sec(now_time_t);
-    });
-}
-
 uint64_t token::calbonus(name owner, uint64_t bill_id, name ram_payer)
 {
     bill_stats sst(get_self(), owner.value);
@@ -521,7 +516,9 @@ uint64_t token::calbonus(name owner, uint64_t bill_id, name ram_payer)
         if (quantity.quantity.amount != 0) {
             extended_asset dmc_quantity = get_dmc_by_vrsi(quantity);
             if (dmc_quantity.quantity.amount > 0) {
-                add_balance(owner, dmc_quantity, ram_payer);
+                maker_tbl.modify(iter, ram_payer, [&](auto& s) {
+                    s.total_staked += dmc_quantity;
+                });
                 SEND_INLINE_ACTION(*this, incentiverec, {_self, "active"_n}, {owner, dmc_quantity, bill_id, 0, 0});
             }
         }
@@ -561,10 +558,13 @@ void token::setabostats(uint64_t stage, double user_rate, double foundation_rate
             a.remaining_release = total_release;
             a.start_at = start_at;
             a.end_at = end_at;
-            if (set_now)
-                a.last_released_at = time_point_sec(current_time_point());
-            else
-                a.last_released_at = start_at;
+            if (set_now){
+                a.last_user_released_at = time_point_sec(current_time_point());
+                a.last_foundation_released_at = time_point_sec(current_time_point());
+            } else {
+                a.last_user_released_at = start_at;
+                a.last_foundation_released_at = start_at;
+            }
         });
     }
 }
@@ -607,6 +607,10 @@ double token::get_dmc_rate(uint64_t rate_value)
     avg_table atb(get_self(), get_self().value);
     auto aitr = atb.begin();
     double value = rate_value / 100.0;
+    if (aitr == atb.end()) {
+        auto avg_price = get_dmc_config("initalprice"_n, default_initial_price);
+        return value * avg_price;
+    }
     return value * aitr->avg;
 }
 

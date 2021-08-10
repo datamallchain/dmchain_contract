@@ -75,11 +75,11 @@ void token::extransfer(name from, name to, extended_asset quantity, string memo)
     }
 
     if (quantity.get_extended_symbol() == pst_sym) {
-        check(from == system_account || from == eos_account, "pst can not transfer");
+        check(from == system_account || from == eos_account, "PST can not transfer");
     }
 
     if (quantity.get_extended_symbol() == rsi_sym) {
-        check(from == system_account || from == eos_account, "pst can not transfer");
+        check(from == system_account || from == eos_account, "RSI can not transfer");
     }
 
     check(is_account(to), "to account does not exist");

@@ -281,6 +281,29 @@ double token::get_real_asset(extended_asset quantity)
     return (double)quantity.quantity.amount / std::pow(10, quantity.get_extended_symbol().get_symbol().precision());
 }
 
+void token::setreserve(name owner, extended_asset dmc_quantity, extended_asset rsi_quantity)
+{
+    require_auth(system_account);
+    check(dmc_quantity.get_extended_symbol() == dmc_sym && rsi_quantity.get_extended_symbol() == rsi_sym, "only DMC && RSI can be set as reserve");
+    check(dmc_quantity.quantity.amount > 0 && rsi_quantity.quantity.amount > 0, "reserve can't be zero");
+
+    inner_market market(get_self(), get_self().value);
+    auto m_index = market.get_index<"bysymbol"_n>();
+    auto m_iter = m_index.find(inner_uniswap_market::key(dmc_quantity.get_extended_symbol(), rsi_quantity.get_extended_symbol()));
+    if (m_iter == m_index.end()) {
+        market.emplace(owner, [&](auto& r) {
+            r.primary = market.available_primary_key();
+            r.tokenx = dmc_quantity;
+            r.tokeny = rsi_quantity;
+        });
+    } else {
+        m_index.modify(m_iter, owner, [&](auto& r) {
+            r.tokenx = dmc_quantity;
+            r.tokeny = rsi_quantity;
+        });
+    }
+}
+
 extended_asset token::allocation_abo(time_point_sec now_time)
 {
     abostats ast(get_self(), get_self().value);
@@ -293,7 +316,7 @@ extended_asset token::allocation_abo(time_point_sec now_time)
                 to_foundation.quantity.amount += it->remaining_release.quantity.amount * it->foundation_rate;
                 to_user.quantity.amount += it->remaining_release.quantity.amount * it->user_rate;
                 ast.modify(it, get_self(), [&](auto& a) {
-                    a.last_released_at = it->end_at;
+                    a.last_user_released_at = it->end_at;
                     a.remaining_release.quantity.amount = 0;
                 });
             }
@@ -301,14 +324,14 @@ extended_asset token::allocation_abo(time_point_sec now_time)
         } else if (now_time < it->start_at) {
             break;
         } else {
-            auto duration_time = now_time.sec_since_epoch() - it->last_released_at.sec_since_epoch();
-            auto remaining_time = it->end_at.sec_since_epoch() - it->last_released_at.sec_since_epoch();
+            auto duration_time = now_time.sec_since_epoch() - it->last_user_released_at.sec_since_epoch();
+            auto remaining_time = it->end_at.sec_since_epoch() - it->last_user_released_at.sec_since_epoch();
             double per = (double)duration_time / (double)remaining_time;
             uint64_t total_asset_amount = per * it->remaining_release.quantity.amount;
             to_foundation.quantity.amount += total_asset_amount * it->foundation_rate;
             to_user.quantity.amount += total_asset_amount * it->user_rate;
             ast.modify(it, get_self(), [&](auto& a) {
-                a.last_released_at = now_time;
+                a.last_user_released_at = now_time;
                 a.remaining_release.quantity.amount -= total_asset_amount;
             });
             break;
@@ -339,16 +362,9 @@ extended_asset token::allocation_penalty(time_point_sec now_time)
             uint64_t total_asset_amount = per * it->remaining_release.quantity.amount;
             to_penalty.quantity.amount += total_asset_amount;
 
-            // because updater cannot change primary key when modifying an object
-            // so delete it and insert a new one
-            auto remaining_release = it->remaining_release;
-            auto end_at = it->end_at;
-            penst.erase(it);
-            remaining_release.quantity.amount -= total_asset_amount;
-            penst.emplace(get_self(), [&](auto& p) {
+            penst.modify(it, get_self(), [&](auto& p) {
                 p.start_at = now_time;
-                p.end_at = end_at;
-                p.remaining_release = remaining_release;
+                p.remaining_release.quantity.amount -= total_asset_amount;
             });
             break;
         }
@@ -379,7 +395,7 @@ void token::increase_penalty(extended_asset quantity)
 
     // the first period 
     {
-        auto it = penst.find(now_time_t);
+        auto it = penst.begin();
         if (it != penst.end()) {
             penst.modify(it, get_self(), [&](auto& p) {
                 p.remaining_release.quantity.amount += first_period_amount;
@@ -397,7 +413,7 @@ void token::increase_penalty(extended_asset quantity)
     for (int i = 0; i < copies; i++) {
         auto end_time = time_point_sec(nearest_hour_time) + eosio::hours(i + 1);
         auto start_time = time_point_sec(nearest_hour_time) + eosio::hours(i);
-        auto it = penst.find(start_time.sec_since_epoch());
+        auto it = penst.find(end_time.sec_since_epoch());
         if (it != penst.end()) {
             penst.modify(it, get_self(), [&](auto& p) {
                 p.remaining_release.quantity.amount += period_amount;
@@ -416,11 +432,11 @@ extended_asset token::exchange_from_uniswap(extended_asset add_balance)
 {
     check(add_balance.quantity.is_valid(), "invalid add_balance");
     check(add_balance.get_extended_symbol() == rsi_sym || add_balance.get_extended_symbol() == dmc_sym, "only RSI and DMC can be added to uniswap market");
-    check(add_balance.quantity.amount > 0, "add_balance must be positive");
+    check(add_balance.quantity.amount >= 0, "add_balance must be positive");
 
-    swap_market market(get_self(), get_self().value);
+    inner_market market(get_self(), get_self().value);
     auto m_index = market.get_index<"bysymbol"_n>();
-    auto m_iter = m_index.find(uniswap_market::key(rsi_sym, dmc_sym));
+    auto m_iter = m_index.find(inner_uniswap_market::key(rsi_sym, dmc_sym));
     check(m_iter != m_index.end(), "this uniswap pair dose not exist");
 
     // tokenx = RSI

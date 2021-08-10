@@ -1,4 +1,5 @@
 #include <dmc.token/dmc.token.hpp>
+#include <eosio/transaction.hpp>
 #include <string.h>
 
 namespace eosio {
@@ -35,7 +36,7 @@ void token::phishing_challenge() {
         dmc_challenges challenge_tbl(get_self(), get_self().value);
         auto challenge_iter = challenge_tbl.find(state_id_iter->order_id);
         if (is_challenge_end(challenge_iter->state) && challenge_iter->data_block_count) {
-            auto challenge_hash = sha256<order_id_args>({ _self, _self, 0, zero_dmc, zero_dmc, std::string("challenge"), time_point_sec(current_time_point()) });
+            auto challenge_hash = sha256<order_id_args>({ _self, _self, uint64_t(tapos_block_num()) * tapos_block_prefix(), zero_dmc, zero_dmc, std::string("challenge"), time_point_sec(current_time_point()) });
             uint64_t data_id = uint64_t(*reinterpret_cast<const uint64_t*>(&hash)) % challenge_iter->data_block_count;
             SEND_INLINE_ACTION(*this, reqchallenge, { _self, "active"_n }, { _self, state_id_iter->order_id, data_id, challenge_hash, std::string("phishing")});
             dmc_global_tbl.modify(phishing_date_iter, get_self(), [&](auto& d) {
@@ -190,8 +191,7 @@ void token::anschallenge(name sender, uint64_t order_id, checksum256 reply_hash)
     auto order = *order_iter;
     order.user_pledge += challenge_iter->user_lock - user_pay;
 
-    add_balance(abo_account, user_pay, sender);
-    SEND_INLINE_ACTION(*this, assetcharec, { _self, "active"_n }, { abo_account, user_pay, 0, order_id });
+    increase_penalty(user_pay);
     SEND_INLINE_ACTION(*this, ordercharec, { _self, "active"_n },
         { order_id, challenge_iter->user_lock - user_pay, extended_asset(0, dmc_sym),
             extended_asset(0, dmc_sym), user_pay - challenge_iter->user_lock, time_point_sec(current_time_point()), OrderReceiptChallengeAns });
@@ -267,8 +267,7 @@ void token::arbitration(name sender, uint64_t order_id, const std::vector<char>&
     auto order = *order_iter;
     order.user_pledge += challenge_iter->user_lock - user_pay;
 
-    add_balance(abo_account, user_pay, sender);
-    SEND_INLINE_ACTION(*this, assetcharec, { _self, "active"_n }, { abo_account, user_pay, 0, order_id });
+    increase_penalty(user_pay);
     if ((challenge_iter->user_lock - user_pay).quantity.amount > 0) {
         SEND_INLINE_ACTION(*this, ordercharec, { _self, "active"_n },
             { order_id, challenge_iter->user_lock - user_pay, extended_asset(0, dmc_sym),
@@ -310,8 +309,7 @@ void token::paychallenge(name sender, uint64_t order_id)
     SEND_INLINE_ACTION(*this, makercharec, { _self, "active"_n }, { _self, order_iter->miner, -miner_arbitration, MakerReceiptChallengePay });
 
     auto system_reward = extended_asset(miner_arbitration.quantity.amount * 0.5, miner_arbitration.get_extended_symbol());
-    add_balance(abo_account, system_reward, sender);
-    SEND_INLINE_ACTION(*this, assetcharec, { _self, "active"_n }, { abo_account, system_reward, 0, order_id });
+    increase_penalty(system_reward);
     extended_asset zero_dmc = extended_asset(0, dmc_sym);
     SEND_INLINE_ACTION(*this, ordercharec, { _self, "active"_n },
         { order_id, challenge_iter->user_lock, zero_dmc, zero_dmc, -challenge_iter->user_lock,
@@ -326,7 +324,7 @@ void token::paychallenge(name sender, uint64_t order_id)
     order_info.user_pledge += challenge_iter->user_lock + order_info.price + (miner_arbitration - system_reward);
     order_info.lock_pledge -= order_info.price;
     order_info.state = OrderStateEnd;
-    destory_pst(order_info, sender);
+    auto remain_pay = distribute_lp_pool(order_info.order_id, order_info.miner_lock_dmc, challenge_iter->miner_pay, sender, false);
     order_tbl.modify(order_iter, sender, [&](auto& o) {
         o = order_info;
     });
@@ -334,6 +332,7 @@ void token::paychallenge(name sender, uint64_t order_id)
     challenge_tbl.modify(challenge_iter, sender, [&](auto& c) {
         c.state = ChallengeTimeout;
         c.user_lock = extended_asset(0, c.user_lock.get_extended_symbol());
+        c.miner_pay = remain_pay;
     });
 
     SEND_INLINE_ACTION(*this, orderrec, { _self, "active"_n }, { *order_iter, 2 });
