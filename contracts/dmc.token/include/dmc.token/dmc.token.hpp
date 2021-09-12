@@ -17,7 +17,7 @@ namespace eosio {
 
 using std::string;
 
-static const name eos_account = "eosio"_n;
+static const name dmc_account = "dmc"_n;
 constexpr double static_weights = 10000.0;
 constexpr double uniswap_fee = 0.003;
 constexpr uint64_t uint64_max = ~uint64_t(0);
@@ -26,7 +26,7 @@ constexpr double miner_scale = 0.8;
 constexpr double incentive_rate = 0.1;
 
 // for DMC
-static constexpr name token_account = "eosio.token"_n;
+static constexpr name token_account = "dmc.token"_n;
 static constexpr name active_permission = "active"_n;
 static const name system_account = "datamall"_n;
 static const name empty_account = name { 0 };
@@ -176,7 +176,7 @@ public:
     ACTION exdestroy(extended_symbol sym);
 
 public:
- 
+
     ACTION exlocktrans(name from, name to, extended_asset quantity, time_point_sec expiration, time_point_sec expiration_to, string memo);
 
     ACTION exunlock(name owner, extended_asset quantity, time_point_sec expiration, string memo);
@@ -195,13 +195,17 @@ public:
 
     ACTION unbill(name owner, uint64_t bill_id, string memo);
 
+    ACTION getincentive(name owner, uint64_t bill_id);
+
     ACTION setabostats(uint64_t stage, double user_rate, double foundation_rate, extended_asset total_release, time_point_sec start_at, time_point_sec end_at);
 
     ACTION order(name owner, name miner, uint64_t bill_id, extended_asset asset, extended_asset reserve, string memo, time_point_sec deposit_valid);
 
-    ACTION setreserve(name owner, extended_asset dmc_quantity, extended_asset pst_quantity);
+    ACTION setreserve(name owner, extended_asset dmc_quantity, extended_asset rsi_quantity);
 
 public:
+
+    ACTION allocation(string memo);
 
     ACTION increase(name owner, extended_asset asset, name miner);
 
@@ -261,7 +265,7 @@ private:
     extended_asset get_asset_by_amount(T amount, extended_symbol symbol);
 
     void uniswapdeal(name owner, extended_asset& market_from, extended_asset& market_to, extended_asset from, extended_asset to_sym, uint64_t primary, double price, name rampay);
-
+ 
     extended_asset exchange_from_uniswap(extended_asset add_balance);
 
     extended_asset get_dmc_by_vrsi(extended_asset rsi_quantity);
@@ -409,8 +413,8 @@ public:
         lock_accounts;
 
     TABLE currency_stats {
-        asset supply; 
-        asset max_supply; 
+        asset supply;
+        asset max_supply;
         name issuer;
         asset reserve_supply;
 
@@ -559,9 +563,9 @@ public:
     typedef eosio::multi_index<"dmcconfig"_n, dmc_config> dmc_global;
 
     TABLE dmc_order {
-        uint64_t order_id; 
-        name user; 
-        name miner; 
+        uint64_t order_id;
+        name user;
+        name miner;
         uint64_t bill_id;
         extended_asset user_pledge; // dmc
         extended_asset miner_lock_pst; // pst
@@ -699,7 +703,7 @@ public:
 private:
     inline static name get_foundation(name issuer)
     {
-        return issuer == system_account ? eos_account : issuer;
+        return issuer == system_account ? dmc_account : issuer;
     }
 
     void sub_balance(name owner, extended_asset value);

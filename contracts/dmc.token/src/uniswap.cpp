@@ -264,7 +264,7 @@ void token::uniswapdeal(name owner, extended_asset& market_from, extended_asset&
 
     SEND_INLINE_ACTION(*this, pricerec, { _self, "active"_n }, { old_price, min_price });
     SEND_INLINE_ACTION(*this, traderecord, { _self, "active"_n },
-        { owner, eos_account, spread_from, spread_to, to_fee, 0 });
+        { owner, dmc_account, spread_from, spread_to, to_fee, 0 });
 
     add_balance(owner, add_asset, rampay);
     sub_balance(owner, sub_asset);
@@ -293,13 +293,13 @@ void token::setreserve(name owner, extended_asset dmc_quantity, extended_asset r
     if (m_iter == m_index.end()) {
         market.emplace(owner, [&](auto& r) {
             r.primary = market.available_primary_key();
-            r.tokenx = dmc_quantity;
-            r.tokeny = rsi_quantity;
+            r.tokenx = rsi_quantity;
+            r.tokeny = dmc_quantity;
         });
     } else {
         m_index.modify(m_iter, owner, [&](auto& r) {
-            r.tokenx = dmc_quantity;
-            r.tokeny = rsi_quantity;
+            r.tokenx = rsi_quantity;
+            r.tokeny = dmc_quantity;
         });
     }
 }
@@ -337,10 +337,9 @@ extended_asset token::allocation_abo(time_point_sec now_time)
             break;
         }
     }
-
-    if (to_foundation.quantity.amount != 0) {
-        SEND_INLINE_ACTION(*this, issue, {eos_account, "active"_n}, {system_account, to_foundation.quantity, "allocation to foundation"});
-    }
+    // if (to_foundation.quantity.amount != 0) {
+    //     SEND_INLINE_ACTION(*this, issue, {dmc_account, "active"_n}, {system_account, to_foundation.quantity, "allocation to foundation"});
+    // }
 
     return to_user;
 }
@@ -434,6 +433,8 @@ extended_asset token::exchange_from_uniswap(extended_asset add_balance)
     check(add_balance.get_extended_symbol() == rsi_sym || add_balance.get_extended_symbol() == dmc_sym, "only RSI and DMC can be added to uniswap market");
     check(add_balance.quantity.amount >= 0, "add_balance must be positive");
 
+    if(add_balance.quantity.amount == 0) return extended_asset(0, dmc_sym);
+
     inner_market market(get_self(), get_self().value);
     auto m_index = market.get_index<"bysymbol"_n>();
     auto m_iter = m_index.find(inner_uniswap_market::key(rsi_sym, dmc_sym));
@@ -452,21 +453,19 @@ extended_asset token::exchange_from_uniswap(extended_asset add_balance)
     extended_asset to_user(0, dmc_sym);
     if (add_balance.get_extended_symbol() == rsi_sym) {
         rsi_quantity += add_balance;
-        double real_rsi_quantity = get_real_asset(rsi_quantity);
+
         double real_dmc_quantity = real_market_total / real_rsi_quantity;
         extended_asset new_dmc_quantity = get_asset_by_amount<double, std::round>(real_dmc_quantity, dmc_sym);
-
+        
         // DMC need return to user
         to_user = dmc_quantity - new_dmc_quantity;
         dmc_quantity = new_dmc_quantity;
     } else if (add_balance.get_extended_symbol() == dmc_sym) {
         dmc_quantity += add_balance;
-        double real_dmc_quantity = get_real_asset(dmc_quantity);
+
         double real_rsi_quantity = real_market_total / real_dmc_quantity;
         extended_asset new_rsi_quantity = get_asset_by_amount<double, std::round>(real_rsi_quantity, rsi_sym);
 
-        // rsi exretire directly
-        sub_stats(rsi_quantity - new_rsi_quantity);
         rsi_quantity = new_rsi_quantity;
     } else {
         check(false, "only RSI and DMC can be added to uniswap market");

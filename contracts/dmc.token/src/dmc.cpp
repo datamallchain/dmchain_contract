@@ -16,7 +16,7 @@ void token::bill(name owner, extended_asset asset, double price, time_point_sec 
     check(s_sym == pst_sym, "only proof of service token can be billed");
     check(price >= 0.0001 && price < std::pow(2, 32), "invalid price");
     check(asset.quantity.amount > 0, "must bill a positive amount");
-    check(deposit_ratio >= 0, "invalid deposit ratio");
+    check(deposit_ratio >= 0 && deposit_ratio <= 99, "invalid deposit ratio");
 
     time_point_sec now_time = time_point_sec(current_time_point());
     check(expire_on >= now_time + get_dmc_config("serverinter"_n, default_service_interval), "invalid service time");
@@ -404,7 +404,8 @@ double token::cal_current_rate(extended_asset dmc_asset, name owner)
 
 void token::liquidation(string memo)
 {
-    require_auth(eos_account);
+    require_auth(dmc_account);
+    check(memo.size() <= 256, "memo has more than 256 bytes");
     dmc_makers maker_tbl(get_self(), get_self().value);
     auto maker_idx = maker_tbl.get_index<"byrate"_n>();
 
@@ -483,9 +484,21 @@ void token::liquidation(string memo)
             s.current_rate = new_rate;
         });
         SEND_INLINE_ACTION(*this, makercharec, { _self, "active"_n }, { _self, miner, -dmc, MakerReceiptLiquidation });
-        add_balance(system_account, dmc, eos_account);
+        add_balance(system_account, dmc, dmc_account);
         SEND_INLINE_ACTION(*this, liqrec, { _self, "active"_n }, { miner, pst, dmc });
     }
+}
+
+void token::getincentive(name owner, uint64_t bill_id)
+{
+    require_auth(owner);
+    uint64_t now_time_t = calbonus(owner, bill_id, owner);
+    bill_stats sst(get_self(), owner.value);
+    auto ust_idx = sst.get_index<"byid"_n>();
+    auto ust = ust_idx.find(bill_id);
+    ust_idx.modify(ust, get_self(), [&](auto& s) {
+        s.updated_at = time_point_sec(now_time_t);
+    });
 }
 
 uint64_t token::calbonus(name owner, uint64_t bill_id, name ram_payer)
@@ -528,7 +541,7 @@ uint64_t token::calbonus(name owner, uint64_t bill_id, name ram_payer)
 
 void token::setabostats(uint64_t stage, double user_rate, double foundation_rate, extended_asset total_release, time_point_sec start_at, time_point_sec end_at)
 {
-    require_auth(eos_account);
+    require_auth(dmc_account);
     check(stage >= 1 && stage <= 11, "invalid stage");
     check(user_rate <= 1 && user_rate >= 0, "invalid user_rate");
     check(foundation_rate + user_rate == 1, "invalid foundation_rate");
@@ -571,7 +584,7 @@ void token::setabostats(uint64_t stage, double user_rate, double foundation_rate
 
 void token::setdmcconfig(name key, uint64_t value)
 {
-    require_auth(eos_account);
+    require_auth(dmc_account);
     dmc_global dmc_global_tbl(get_self(), get_self().value);
     switch (key.value) {
     case ("claiminter"_n).value:
@@ -656,5 +669,54 @@ void token::trace_price_history(double price, uint64_t bill_id)
         a.count += 1;
         a.avg = (double)a.total / a.count;
     });
+}
+
+void token::allocation(string memo)
+{
+    require_auth(dmc_account);
+    check(memo.size() <= 256, "memo has more than 256 bytes");
+    abostats ast(get_self(), get_self().value);
+    extended_asset to_foundation(0, dmc_sym);
+    extended_asset to_user(0, dmc_sym);
+
+    auto now_time = time_point_sec(current_time_point());
+    for (auto it = ast.begin(); it != ast.end();) {
+        if (now_time > it->end_at) {
+            if (it->remaining_release.quantity.amount != 0) {
+                to_foundation.quantity.amount = it->remaining_release.quantity.amount * it->foundation_rate;
+                to_user.quantity.amount = it->remaining_release.quantity.amount * it->user_rate;
+                ast.modify(it, get_self(), [&](auto& a) {
+                    a.last_foundation_released_at = it->end_at;
+                    a.remaining_release.quantity.amount = 0;
+                });
+            }
+            it++;
+        } else if (now_time < it->start_at) {
+            break;
+        } else {
+            auto duration_time = now_time.sec_since_epoch() - it->last_foundation_released_at.sec_since_epoch();
+
+            if (duration_time / 86400 == 0) // 24 * 60 * 60
+                break;
+            auto remaining_time = it->end_at.sec_since_epoch() - it->last_foundation_released_at.sec_since_epoch();
+            double per = (double)duration_time / (double)remaining_time;
+            if (per > 1)
+                per = 1;
+            uint64_t total_asset_amount = per * it->remaining_release.quantity.amount;
+            if (total_asset_amount != 0) {
+                to_foundation.quantity.amount = total_asset_amount * it->foundation_rate;
+                to_user.quantity.amount = total_asset_amount * it->user_rate;
+                ast.modify(it, get_self(), [&](auto& a) {
+                    a.last_foundation_released_at = now_time;
+                    a.remaining_release.quantity.amount -= total_asset_amount;
+                });
+            }
+            break;
+        }
+    }
+
+    if (to_foundation.quantity.amount != 0 && to_user.quantity.amount != 0) {
+        SEND_INLINE_ACTION(*this, issue, { dmc_account, "active"_n }, { system_account, to_foundation.quantity, "allocation to foundation" });
+    }
 }
 } // namespace eosio

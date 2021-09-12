@@ -16,7 +16,7 @@ void token::excreate(name issuer, asset maximum_supply, asset reserve_supply, ti
     check(reserve_supply.symbol == maximum_supply.symbol, "reserve_supply symbol precision mismatch");
     check(reserve_supply.symbol.precision() >= minimum_token_precision, "token precision too small");
 
-    if (issuer != eos_account && issuer != system_account)
+    if (issuer != dmc_account && issuer != system_account)
         check(expiration >= current_time_point(), "expiration must longer than now");
     else
         expiration = time_point_sec();
@@ -68,18 +68,18 @@ void token::extransfer(name from, name to, extended_asset quantity, string memo)
     check(from != to, "cannot transfer to self");
     require_auth(from);
 
-    if (to == "eosio.ramfee"_n || to == "eosio.saving"_n) {
+    if (to == "dmc.ramfee"_n || to == "dmc.saving"_n) {
         INLINE_ACTION_SENDER(eosio::token, exretire)
-        ("eosio.token"_n, { { from, "active"_n } }, { from, quantity, std::string("exretire tokens for producer pay and savings") });
+        ("dmc.token"_n, { { from, "active"_n } }, { from, quantity, std::string("exretire tokens for producer pay and savings") });
         return;
     }
 
     if (quantity.get_extended_symbol() == pst_sym) {
-        check(from == system_account || from == eos_account, "PST can not transfer");
+        check(from == system_account || from == dmc_account, "PST can not transfer");
     }
 
     if (quantity.get_extended_symbol() == rsi_sym) {
-        check(from == system_account || from == eos_account, "RSI can not transfer");
+        check(from == system_account || from == dmc_account, "RSI can not transfer");
     }
 
     check(is_account(to), "to account does not exist");
@@ -191,7 +191,7 @@ void token::change_pst(name owner, extended_asset value)
     check(st->amount.quantity.amount >= 0, "overdrawn balance when change PST");
 
     //  TODO: ADD GLOBAL SET
-    action({ _self, "active"_n }, "eosio"_n, "settotalvote"_n,
+    action({ _self, "active"_n }, "dmc"_n, "settotalvote"_n,
         std::make_tuple(owner, st->amount.quantity.amount))
         .send();
 }
