@@ -12,7 +12,7 @@ void token::update_order_asset(dmc_order& order, OrderState new_state, uint64_t 
     auto iter = maker_snapshot_tbl.find(order.order_id);
     check(iter != maker_snapshot_tbl.end(), "cannot find miner in dmc maker");
     auto user_rsi = extended_asset(round(double(order.price.quantity.amount) * pow(10, rsi_sym.get_symbol().precision() - order.price.get_extended_symbol().get_symbol().precision())), rsi_sym);
-    auto miner_rsi_total = extended_asset(round(user_rsi.quantity.amount * (1 + iter->rate)), rsi_sym);
+    auto miner_rsi_total = extended_asset(round(user_rsi.quantity.amount * (1 + iter->rate / 100.0)), rsi_sym);
     auto dmc_pledge = extended_asset(order.price.quantity.amount / 2, (order.price.get_extended_symbol()));
     auto miner_rsi_pledge = extended_asset(miner_rsi_total.quantity.amount / 2, (miner_rsi_total.get_extended_symbol()));
 
@@ -90,12 +90,11 @@ void token::change_order(dmc_order& order, const dmc_challenge& challenge, time_
         if (order.latest_settlement_date + claims_interval > current) {
             return;
         }
+        maker_snapshot_table  maker_snapshot_tbl(get_self(), get_self().value);
+        auto iter = maker_snapshot_tbl.find(order.order_id);
+        check(iter != maker_snapshot_tbl.end(), "cannot find miner in dmc maker");
         auto user_rsi = extended_asset(round(double(order.price.quantity.amount) * pow(10, rsi_sym.get_symbol().precision() - order.price.get_extended_symbol().get_symbol().precision())), rsi_sym);
-        dmc_makers maker_tbl(get_self(), get_self().value);
-        auto iter = maker_tbl.find(order.miner.value);
-        check(iter != maker_tbl.end(), "cannot find miner in dmc maker");
-        double bmr = iter->benchmark_stake_rate / 100.0;
-        auto miner_rsi_pledge = extended_asset(round(user_rsi.quantity.amount * (1 + bmr)) / 2, rsi_sym);
+        auto miner_rsi_pledge = extended_asset(round(user_rsi.quantity.amount * (1 + iter->rate / 100.0)) / 2, rsi_sym);
         auto dmc_pledge = extended_asset(order.price.quantity.amount / 2, (order.price.get_extended_symbol()));
         
         if (order.lock_pledge >= dmc_pledge) {
@@ -129,8 +128,8 @@ void token::generate_maker_snapshot(uint64_t order_id, uint64_t bill_id, name mi
     dmc_makers maker_tbl(get_self(), get_self().value);
     auto maker_iter = maker_tbl.find(miner.value);
     check(maker_iter != maker_tbl.end(), "can't find maker pool");
-    double benchmark_stake_rate = get_dmc_rate(maker_iter->benchmark_stake_rate);
-    double r = cal_current_rate(maker_iter->total_staked, miner);
+    double r = std::round(maker_iter->current_rate * 100 / get_avg_price());
+
     dmc_maker_pool dmc_pool(get_self(), miner.value);
     std::vector<maker_lp_pool> lps;
     for (auto iter = dmc_pool.begin(); iter != dmc_pool.end(); iter++) {
@@ -161,7 +160,7 @@ extended_asset token::distribute_lp_pool(uint64_t order_id, extended_asset pledg
     auto maker_iter = maker_tbl.find(miner.value);
     auto remain_pay = extended_asset(0, pledge.get_extended_symbol());
     if (distribute_miner) {
-        double current_r = snapshot_iter->rate;
+        double current_r = snapshot_iter->rate / 100.0;
         auto miner_dmc_pledge = extended_asset(round(pledge.quantity.amount / (current_r + 1.0)), pledge.get_extended_symbol());
         auto remain_pay = miner_dmc_pledge.quantity > challenge_pledge.quantity ? extended_asset(0, challenge_pledge.get_extended_symbol()) : challenge_pledge - miner_dmc_pledge;
         miner_dmc_pledge = miner_dmc_pledge.quantity > challenge_pledge.quantity ? miner_dmc_pledge - challenge_pledge : extended_asset(0, miner_dmc_pledge.get_extended_symbol());
@@ -339,7 +338,7 @@ void token::cancelorder(name sender, uint64_t order_id) {
     auto order_info = *order_iter;
     auto challenge_info = *challenge_iter;
     update_order(order_info, challenge_info, sender);
-    check(is_challenge_end(challenge_info.state), "order in challenge state");
+    check(is_challenge_end(challenge_info.state) || challenge_info.state == ChallengePrepare, "order in challenge state");
     if (order_info.state == OrderStateWaiting) {
         check(challenge_info.state == ChallengePrepare, "invalid challenge state");
         order_info.state = OrderStateCancel;

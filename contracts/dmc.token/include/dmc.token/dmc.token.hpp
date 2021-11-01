@@ -41,7 +41,7 @@ constexpr uint64_t default_order_service_epoch = 12 * week_sec;
 constexpr uint32_t identifying_code_mask = 0x3FFFFFF;
 constexpr uint64_t default_dmc_challenge_interval = day_sec;
 constexpr uint64_t default_phishing_interval = day_sec;
-constexpr double default_initial_price = 0.1;
+constexpr uint64_t default_initial_price = 10;
 /**
  * the longest service time for bill / order
  * 24 weeks
@@ -265,7 +265,7 @@ private:
     extended_asset get_asset_by_amount(T amount, extended_symbol symbol);
 
     void uniswapdeal(name owner, extended_asset& market_from, extended_asset& market_to, extended_asset from, extended_asset to_sym, uint64_t primary, double price, name rampay);
- 
+
     extended_asset exchange_from_uniswap(extended_asset add_balance);
 
     extended_asset get_dmc_by_vrsi(extended_asset rsi_quantity);
@@ -325,6 +325,7 @@ private:
 private:
     uint64_t get_dmc_config(name key, uint64_t default_value);
     double get_dmc_rate(uint64_t rate_value);
+    double get_avg_price();
 
 public:
     TABLE nft_symbol_info {
@@ -477,7 +478,6 @@ public:
     typedef eosio::multi_index<"swappool"_n, market_pool> swap_pool;
 
     TABLE bill_record {
-        uint64_t primary;
         uint64_t bill_id;
         name owner;
         extended_asset matched;
@@ -488,16 +488,14 @@ public:
         time_point_sec expire_on;
         uint64_t deposit_ratio;
 
-        uint64_t primary_key() const { return primary; }
+        uint64_t primary_key() const { return bill_id; }
         uint64_t get_lower() const { return price; }
         uint64_t get_time() const { return uint64_t(updated_at.sec_since_epoch()); };
-        uint64_t get_stake_id() const { return bill_id; }
         uint64_t by_expire() const { return uint64_t(expire_on.sec_since_epoch()); }
     };
     typedef eosio::multi_index<"stakerec"_n, bill_record,
         indexed_by<"bylowerprice"_n, const_mem_fun<bill_record, uint64_t, &bill_record::get_lower>>,
         indexed_by<"bytime"_n, const_mem_fun<bill_record, uint64_t, &bill_record::get_time>>,
-        indexed_by<"byid"_n, const_mem_fun<bill_record, uint64_t, &bill_record::get_stake_id>>,
         indexed_by<"byexpire"_n, const_mem_fun<bill_record, uint64_t, &bill_record::by_expire>>>
         bill_stats;
 

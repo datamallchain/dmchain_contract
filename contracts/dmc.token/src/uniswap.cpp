@@ -304,6 +304,7 @@ void token::setreserve(name owner, extended_asset dmc_quantity, extended_asset r
     }
 }
 
+// TODO
 extended_asset token::allocation_abo(time_point_sec now_time)
 {
     abostats ast(get_self(), get_self().value);
@@ -328,18 +329,14 @@ extended_asset token::allocation_abo(time_point_sec now_time)
             auto remaining_time = it->end_at.sec_since_epoch() - it->last_user_released_at.sec_since_epoch();
             double per = (double)duration_time / (double)remaining_time;
             uint64_t total_asset_amount = per * it->remaining_release.quantity.amount;
-            to_foundation.quantity.amount += total_asset_amount * it->foundation_rate;
             to_user.quantity.amount += total_asset_amount * it->user_rate;
             ast.modify(it, get_self(), [&](auto& a) {
                 a.last_user_released_at = now_time;
-                a.remaining_release.quantity.amount -= total_asset_amount;
+                a.remaining_release -= to_user;
             });
             break;
         }
     }
-    // if (to_foundation.quantity.amount != 0) {
-    //     SEND_INLINE_ACTION(*this, issue, {dmc_account, "active"_n}, {system_account, to_foundation.quantity, "allocation to foundation"});
-    // }
 
     return to_user;
 }

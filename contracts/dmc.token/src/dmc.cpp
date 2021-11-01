@@ -3,7 +3,6 @@
  *  @copyright defined in dmc/LICENSE.txt
  */
 
-#include <dmc.token/utils.hpp>
 #include <dmc.token/dmc.token.hpp>
 
 namespace eosio {
@@ -29,7 +28,6 @@ void token::bill(name owner, extended_asset asset, double price, time_point_sec 
     uint64_t bill_id = uint64_t(*reinterpret_cast<const uint64_t*>(&hash));
 
     sst.emplace(_self, [&](auto& r) {
-        r.primary = sst.available_primary_key();
         r.bill_id = bill_id;
         r.owner = owner;
         r.unmatched = asset;
@@ -48,12 +46,11 @@ void token::unbill(name owner, uint64_t bill_id, string memo)
     require_auth(owner);
     check(memo.size() <= 256, "memo has more than 256 bytes");
     bill_stats sst(get_self(), owner.value);
-    auto ust_idx = sst.get_index<"byid"_n>();
-    auto ust = ust_idx.find(bill_id);
-    check(ust != ust_idx.end(), "no such record");
+    auto ust = sst.find(bill_id);
+    check(ust != sst.end(), "no such record");
     extended_asset unmatched_asseet = ust->unmatched;
     calbonus(owner, bill_id, owner);
-    ust_idx.erase(ust);
+    sst.erase(ust);
     add_balance(owner, unmatched_asseet, owner);
 
     SEND_INLINE_ACTION(*this, billrec, { _self, "active"_n }, { owner, unmatched_asseet, bill_id, UNBILL });
@@ -71,9 +68,8 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
     require_recipient(miner);
 
     bill_stats sst(get_self(), miner.value);
-    auto ust_idx = sst.get_index<"byid"_n>();
-    auto ust = ust_idx.find(bill_id);
-    check(ust != ust_idx.end(), "no such record");
+    auto ust = sst.find(bill_id);
+    check(ust != sst.end(), "no such record");
     check(ust->unmatched >= asset, "overdrawn balance");
 
     uint64_t order_serivce_epoch = get_dmc_config("ordsrvepoch"_n, default_order_service_epoch);
@@ -92,7 +88,7 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
 
     uint64_t now_time_t = calbonus(miner, bill_id, owner);
 
-    ust_idx.modify(ust, get_self(), [&](auto& s) {
+    sst.modify(ust, get_self(), [&](auto& s) {
         s.unmatched -= asset;
         s.matched += asset;
         s.updated_at = time_point_sec(now_time_t);
@@ -110,15 +106,10 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
     dmc_makers maker_tbl(get_self(), get_self().value);
     auto maker_iter = maker_tbl.find(miner.value);
     check(maker_iter != maker_tbl.end(), "can't find maker pool");
-    // sub_stats(asset);
-    // change_pst(miner, -asset);
-    double benchmark_stake_rate = get_dmc_rate(maker_iter->benchmark_stake_rate);
-    double r = cal_current_rate(maker_iter->total_staked, miner);
+    
+    double r = std::round(maker_iter->current_rate * 100 / get_avg_price()) / 100.0;
     auto miner_lock_dmc = extended_asset(user_to_pay.quantity.amount * r, user_to_pay.get_extended_symbol());
-    maker_tbl.modify(maker_iter, owner, [&](auto& m) {
-        m.current_rate = cal_current_rate(m.total_staked - miner_lock_dmc, miner);
-        //m.total_staked -= miner_lock_dmc;
-    });
+    check(maker_iter->total_staked >= miner_lock_dmc, "not enough stake quantity");
     dmc_order order_info = {
         .order_id = order_id,
         .user = owner,
@@ -165,6 +156,12 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
         ordercharec_act.send(order_id, reserve, zero_dmc, zero_dmc, zero_dmc, time_point_sec(current_time_point()), OrderReceiptUser);
     }
     generate_maker_snapshot(order_info.order_id, bill_id, order_info.miner, owner);
+    sub_stats(asset);
+    change_pst(miner, -asset);
+    maker_tbl.modify(maker_iter, owner, [&](auto& m) {
+        m.current_rate = cal_current_rate(m.total_staked - miner_lock_dmc, miner);
+        m.total_staked -= miner_lock_dmc;
+    });
     
     trace_price_history(price, bill_id);
     token::orderrec_action orderrec_act{ token_account, { _self, active_permission } };
@@ -494,9 +491,8 @@ void token::getincentive(name owner, uint64_t bill_id)
     require_auth(owner);
     uint64_t now_time_t = calbonus(owner, bill_id, owner);
     bill_stats sst(get_self(), owner.value);
-    auto ust_idx = sst.get_index<"byid"_n>();
-    auto ust = ust_idx.find(bill_id);
-    ust_idx.modify(ust, get_self(), [&](auto& s) {
+    auto ust = sst.find(bill_id);
+    sst.modify(ust, get_self(), [&](auto& s) {
         s.updated_at = time_point_sec(now_time_t);
     });
 }
@@ -504,9 +500,8 @@ void token::getincentive(name owner, uint64_t bill_id)
 uint64_t token::calbonus(name owner, uint64_t bill_id, name ram_payer)
 {
     bill_stats sst(get_self(), owner.value);
-    auto ust_idx = sst.get_index<"byid"_n>();
-    auto ust = ust_idx.find(bill_id);
-    check(ust != ust_idx.end(), "no such record");
+    auto ust = sst.find(bill_id);
+    check(ust != sst.end(), "no such record");
 
     dmc_makers maker_tbl(get_self(), get_self().value);
     const auto& iter = maker_tbl.get(owner.value, "no such pst maker");
@@ -615,13 +610,23 @@ uint64_t token::get_dmc_config(name key, uint64_t default_value)
     return default_value;
 }
 
+double token::get_avg_price() {
+    avg_table atb(get_self(), get_self().value);
+    auto aitr = atb.begin();
+    if (aitr == atb.end()) {
+        auto avg_price = get_dmc_config("initalprice"_n, default_initial_price) / 100.0;
+        return avg_price;
+    }
+    return aitr->avg;
+}
+
 double token::get_dmc_rate(uint64_t rate_value)
 {
     avg_table atb(get_self(), get_self().value);
     auto aitr = atb.begin();
     double value = rate_value / 100.0;
     if (aitr == atb.end()) {
-        auto avg_price = get_dmc_config("initalprice"_n, default_initial_price);
+        auto avg_price = get_dmc_config("initalprice"_n, default_initial_price) / 100.0;
         return value * avg_price;
     }
     return value * aitr->avg;
@@ -705,17 +710,16 @@ void token::allocation(string memo)
             uint64_t total_asset_amount = per * it->remaining_release.quantity.amount;
             if (total_asset_amount != 0) {
                 to_foundation.quantity.amount = total_asset_amount * it->foundation_rate;
-                to_user.quantity.amount = total_asset_amount * it->user_rate;
                 ast.modify(it, get_self(), [&](auto& a) {
                     a.last_foundation_released_at = now_time;
-                    a.remaining_release.quantity.amount -= total_asset_amount;
+                    a.remaining_release -= to_foundation;
                 });
             }
             break;
         }
     }
 
-    if (to_foundation.quantity.amount != 0 && to_user.quantity.amount != 0) {
+    if (to_foundation.quantity.amount != 0) {
         SEND_INLINE_ACTION(*this, issue, { dmc_account, "active"_n }, { system_account, to_foundation.quantity, "allocation to foundation" });
     }
 }

@@ -140,7 +140,7 @@ void token::reqchallenge(name sender, uint64_t order_id, uint64_t data_id, check
     if (sender == get_self()) {
         user_lock = extended_asset(0, user_lock.get_extended_symbol());
     }
-
+    
     check(order.user_pledge >= user_lock, "not enough dmc to challenge");
     order.user_pledge -= user_lock;
     order_tbl.modify(order_iter, sender, [&](auto& o) {
