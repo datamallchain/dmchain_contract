@@ -103,7 +103,7 @@ void token::addmerkle(name sender, uint64_t order_id, checksum256 merkle_root, u
             order_tbl.modify(order_iter, sender, [&](auto& o) {
                 o = order;
             });
-            SEND_INLINE_ACTION(*this, orderrec, { _self, "active"_n }, { *order_iter, 2});
+            SEND_INLINE_ACTION(*this, orderrec, { _self, "active"_n }, { *order_iter});
         } else {
             challenge_tbl.modify(challenge_iter, sender, [&](auto& c) {
                 c.merkle_submitter = name { _self };
@@ -140,7 +140,7 @@ void token::reqchallenge(name sender, uint64_t order_id, uint64_t data_id, check
     if (sender == get_self()) {
         user_lock = extended_asset(0, user_lock.get_extended_symbol());
     }
-    
+
     check(order.user_pledge >= user_lock, "not enough dmc to challenge");
     order.user_pledge -= user_lock;
     order_tbl.modify(order_iter, sender, [&](auto& o) {
@@ -157,9 +157,8 @@ void token::reqchallenge(name sender, uint64_t order_id, uint64_t data_id, check
         c.user_lock += user_lock;
         c.challenger = sender;
     });
-    SEND_INLINE_ACTION(*this, ordercharec, { _self, "active"_n },
-        { order_id, -user_lock, extended_asset(0, dmc_sym), extended_asset(0, dmc_sym), user_lock, time_point_sec(current_time_point()), OrderReceiptChallengeReq });
-    SEND_INLINE_ACTION(*this, orderrec, { _self, "active"_n }, { *order_iter, 2 });
+    SEND_INLINE_ACTION(*this, assetrec, { _self, "active"_n }, { order_id, { -user_lock }, order.user,  ACC_TYPE_USER, OrderReceiptChallengeReq});
+    SEND_INLINE_ACTION(*this, orderrec, { _self, "active"_n }, { *order_iter });
     SEND_INLINE_ACTION(*this, challengerec, { _self, "active"_n }, { *challenge_iter });
 }
 
@@ -189,12 +188,10 @@ void token::anschallenge(name sender, uint64_t order_id, checksum256 reply_hash)
     }
 
     auto order = *order_iter;
-    order.user_pledge += challenge_iter->user_lock - user_pay;
+    add_balance(order.user, challenge_iter->user_lock - user_pay, sender);
+    SEND_INLINE_ACTION(*this, assetrec, { _self, "active"_n }, { order_id, { challenge_iter->user_lock - user_pay }, order.user,  ACC_TYPE_USER, OrderReceiptChallengeAns});
 
     increase_penalty(user_pay);
-    SEND_INLINE_ACTION(*this, ordercharec, { _self, "active"_n },
-        { order_id, challenge_iter->user_lock - user_pay, extended_asset(0, dmc_sym),
-            extended_asset(0, dmc_sym), user_pay - challenge_iter->user_lock, time_point_sec(current_time_point()), OrderReceiptChallengeAns });
 
     challenge_tbl.modify(challenge_iter, sender, [&](auto& c) {
         c.state = ChallengeAnswer;
@@ -206,7 +203,7 @@ void token::anschallenge(name sender, uint64_t order_id, checksum256 reply_hash)
     order_tbl.modify(order_iter, sender, [&](auto& o) {
         o = order;
     });
-    SEND_INLINE_ACTION(*this, orderrec, { _self, "active"_n }, { *order_iter, 2 });
+    SEND_INLINE_ACTION(*this, orderrec, { _self, "active"_n }, { *order_iter });
     SEND_INLINE_ACTION(*this, challengerec, { _self, "active"_n }, { *challenge_iter });
 }
 
@@ -265,13 +262,11 @@ void token::arbitration(name sender, uint64_t order_id, const std::vector<char>&
     }
 
     auto order = *order_iter;
-    order.user_pledge += challenge_iter->user_lock - user_pay;
 
     increase_penalty(user_pay);
     if ((challenge_iter->user_lock - user_pay).quantity.amount > 0) {
-        SEND_INLINE_ACTION(*this, ordercharec, { _self, "active"_n },
-            { order_id, challenge_iter->user_lock - user_pay, extended_asset(0, dmc_sym),
-                extended_asset(0, dmc_sym), user_pay - challenge_iter->user_lock, time_point_sec(current_time_point()), OrderReceiptChallengeArb });
+        add_balance(order.user, challenge_iter->user_lock - user_pay, sender);
+        SEND_INLINE_ACTION(*this, assetrec, { _self, "active"_n }, { order_id, { challenge_iter->user_lock - user_pay }, order.user,  ACC_TYPE_USER, OrderReceiptChallengeArb});
     }
 
     challenge_tbl.modify(challenge_iter, sender, [&](auto& o) {
@@ -284,7 +279,7 @@ void token::arbitration(name sender, uint64_t order_id, const std::vector<char>&
     order_tbl.modify(order_iter, sender, [&](auto& o) {
         o = order;
     });
-    SEND_INLINE_ACTION(*this, orderrec, { _self, "active"_n }, { *order_iter, 2 });
+    SEND_INLINE_ACTION(*this, orderrec, { _self, "active"_n }, { *order_iter });
     SEND_INLINE_ACTION(*this, challengerec, { _self, "active"_n }, { *challenge_iter });
 }
 
@@ -310,21 +305,15 @@ void token::paychallenge(name sender, uint64_t order_id)
 
     auto system_reward = extended_asset(miner_arbitration.quantity.amount * 0.5, miner_arbitration.get_extended_symbol());
     increase_penalty(system_reward);
-    extended_asset zero_dmc = extended_asset(0, dmc_sym);
-    SEND_INLINE_ACTION(*this, ordercharec, { _self, "active"_n },
-        { order_id, challenge_iter->user_lock, zero_dmc, zero_dmc, -challenge_iter->user_lock,
-            time_point_sec(current_time_point()), OrderReceiptChallengePayRet });
-    SEND_INLINE_ACTION(*this, ordercharec, { _self, "active"_n },
-        { order_id, order_iter->lock_pledge, -order_iter->lock_pledge,
-            zero_dmc, zero_dmc, time_point_sec(current_time_point()), OrderReceiptLockRet });
-    SEND_INLINE_ACTION(*this, ordercharec, { _self, "active"_n },
-        { order_id, miner_arbitration - system_reward,
-            zero_dmc, zero_dmc, zero_dmc, time_point_sec(current_time_point()), OrderReceiptChallengePayReward });
+    
+    add_balance(order_info.user, challenge_iter->user_lock + order_info.price + (miner_arbitration - system_reward), sender);
+    SEND_INLINE_ACTION(*this, assetrec, { _self, "active"_n }, { order_id, { challenge_iter->user_lock }, order_info.user,  ACC_TYPE_USER, OrderReceiptChallengePayRet});
+    SEND_INLINE_ACTION(*this, assetrec, { _self, "active"_n }, { order_id, { order_info.price }, order_info.user,  ACC_TYPE_USER, OrderReceiptLockRet});
+    SEND_INLINE_ACTION(*this, assetrec, { _self, "active"_n }, { order_id, { miner_arbitration - system_reward }, order_info.user,  ACC_TYPE_USER, OrderReceiptChallengePayReward});
+    
     order_info.miner_lock_dmc = extended_asset(0, dmc_sym);
-    order_info.user_pledge += challenge_iter->user_lock + order_info.price + (miner_arbitration - system_reward);
     order_info.lock_pledge -= order_info.price;
     order_info.state = OrderStateEnd;
-    auto remain_pay = distribute_lp_pool(order_info.order_id, order_info.miner_lock_dmc, challenge_iter->miner_pay, sender, false);
     order_tbl.modify(order_iter, sender, [&](auto& o) {
         o = order_info;
     });
@@ -332,10 +321,9 @@ void token::paychallenge(name sender, uint64_t order_id)
     challenge_tbl.modify(challenge_iter, sender, [&](auto& c) {
         c.state = ChallengeTimeout;
         c.user_lock = extended_asset(0, c.user_lock.get_extended_symbol());
-        c.miner_pay = remain_pay;
     });
 
-    SEND_INLINE_ACTION(*this, orderrec, { _self, "active"_n }, { *order_iter, 2 });
+    SEND_INLINE_ACTION(*this, orderrec, { _self, "active"_n }, { *order_iter });
     SEND_INLINE_ACTION(*this, challengerec, { _self, "active"_n }, { *challenge_iter });
 }
 }

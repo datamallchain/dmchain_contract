@@ -104,6 +104,14 @@ enum bill_state {
     UNBILL = 1,
 };
 
+enum e_account_type {
+    ACC_TYPE_NONE = 0,
+    ACC_TYPE_USER = 1,
+    ACC_TYPE_MINER = 2
+};
+
+typedef uint8_t AccountType;
+
 enum e_order_receipt_type {
     OrderReceiptUpdate = 1,
     OrderReceiptClaim = 2,
@@ -114,7 +122,10 @@ enum e_order_receipt_type {
     OrderReceiptChallengePayRet = 7,
     OrderReceiptChallengePayReward = 8,
     OrderReceiptLockRet = 9,
-    OrderReceiptEnd = 10,
+    OrderReceiptCancel = 10,
+    OrderReceiptOrder = 11,
+    OrderReceiptDeposit = 12,
+    OrderReceiptEnd = 13,
 };
 
 enum e_maker_receipt_type {
@@ -286,15 +297,12 @@ public:
     ACTION uniswapsnap(name owner, extended_asset quantity);
 
 public:
-    ACTION billrec(name owner, extended_asset asset, uint64_t bill_id, uint8_t state);
-    ACTION incentiverec(name owner, extended_asset inc, uint64_t bill_id, uint64_t order_id, uint8_t type);
+    ACTION incentiverec(name owner, extended_asset inc, uint64_t bill_id);
     ACTION orderclarec(name owner, extended_asset quantity, uint64_t bill_id, uint64_t order_id);
     ACTION redeemrec(name owner, name miner, extended_asset asset);
     ACTION liqrec(name miner, extended_asset pst_asset, extended_asset dmc_asset);
     ACTION makerliqrec(name miner, uint64_t bill_id, extended_asset sub_pst);
     ACTION makercharec(name sender, name miner, extended_asset changed, MakerReceiptType type);
-    ACTION ordercharec(uint64_t order_id, extended_asset storage, extended_asset lock, extended_asset settlement, extended_asset challenge, time_point_sec exec_date, OrderReceiptType type);
-    ACTION assetcharec(name owner, extended_asset changed, uint8_t type, uint64_t id);
 
 public:
     ACTION nftsymrec(uint64_t symbol_id, extended_symbol nft_symbol, std::string symbol_uri, nft_type type);
@@ -695,8 +703,12 @@ public:
     typedef eosio::multi_index<"makesnapshot"_n, maker_snapshot> maker_snapshot_table;
 
 public:
-    ACTION orderrec(dmc_order order_info, uint8_t type);
+    ACTION orderrec(dmc_order order_info);
     ACTION challengerec(dmc_challenge challenge_info);
+    ACTION billsnap(bill_record bill_info);
+    ACTION makersnap(dmc_maker maker_info);
+    ACTION makerpoolrec(name miner, maker_pool pool_info);
+    ACTION assetrec(uint64_t order_id, std::vector<extended_asset> changed, name owner, AccountType acc_type, OrderReceiptType rec_type);
 
 private:
     inline static name get_foundation(name issuer)
@@ -722,11 +734,10 @@ private:
     void update_order_asset(dmc_order& order, OrderState new_state, uint64_t claims_interval);
     void change_order(dmc_order& order, const dmc_challenge& challenge, time_point_sec current, uint64_t claims_interval, name payer);
     void update_order(dmc_order& order, const dmc_challenge& challenge, name payer);
-    extended_asset distribute_lp_pool(uint64_t order_id, extended_asset pledge, extended_asset challenge_pledge, name payer, bool distribute_miner);
+    extended_asset distribute_lp_pool(uint64_t order_id, extended_asset pledge, extended_asset challenge_pledge, name payer,  OrderReceiptType rec_type);
     void phishing_challenge();
 
 public:
-    using ordercharec_action = eosio::action_wrapper<"ordercharec"_n, &token::ordercharec>;
     using orderrec_action = eosio::action_wrapper<"orderrec"_n, &token::orderrec>;
     using challengerec_action = eosio::action_wrapper<"challengerec"_n, &token::challengerec>;
 };

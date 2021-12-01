@@ -43,12 +43,7 @@ void token::uniswapsnap(name owner, extended_asset quantity)
     require_recipient(owner);
 }
 
-void token::billrec(name owner, extended_asset asset, uint64_t bill_id, uint8_t state)
-{
-    require_auth(_self);
-}
-
-void token::incentiverec(name owner, extended_asset inc, uint64_t bill_id, uint64_t order_id, uint8_t type)
+void token::incentiverec(name owner, extended_asset inc, uint64_t bill_id)
 {
     require_auth(_self);
 }
@@ -93,23 +88,31 @@ void token::makercharec(name sender, name miner, extended_asset changed, MakerRe
     require_auth(_self);
 }
 
-void token::ordercharec(uint64_t order_id, extended_asset storage, extended_asset lock, extended_asset settlement, extended_asset challenge, time_point_sec exec_date, OrderReceiptType type)
-{
-    require_auth(_self);
-}
-
-void token::assetcharec(name owner, extended_asset changed, uint8_t type, uint64_t order_id)
-{
-    require_auth(_self);
-}
-
-void token::orderrec(dmc_order order_info, uint8_t type)
+void token::orderrec(dmc_order order_info)
 {
     require_auth(_self);
 }
 
 void token::challengerec(dmc_challenge challenge_info)
 {
+    require_auth(_self);
+}
+
+void token::billsnap(bill_record bill_info)
+{
+    require_auth(_self);
+}
+
+void token::makersnap(dmc_maker maker_info)
+{
+    require_auth(_self);
+}
+
+void token::makerpoolrec(name miner, maker_pool pool_info)
+{
+     require_auth(_self);
+}
+void token::assetrec(uint64_t order_id, std::vector<extended_asset> changed, name owner, AccountType acc_type, OrderReceiptType rec_type) {
     require_auth(_self);
 }
 
