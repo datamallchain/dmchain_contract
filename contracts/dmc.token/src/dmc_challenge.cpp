@@ -301,8 +301,6 @@ void token::paychallenge(name sender, uint64_t order_id)
     dmc_order order_info = *order_iter;
     auto miner_arbitration = order_info.miner_lock_dmc;
 
-    SEND_INLINE_ACTION(*this, makercharec, { _self, "active"_n }, { _self, order_iter->miner, -miner_arbitration, MakerReceiptChallengePay });
-
     auto system_reward = extended_asset(miner_arbitration.quantity.amount * 0.5, miner_arbitration.get_extended_symbol());
     increase_penalty(system_reward);
     

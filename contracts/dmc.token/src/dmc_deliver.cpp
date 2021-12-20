@@ -53,7 +53,7 @@ void token::change_order(dmc_order& order, const dmc_challenge& challenge, time_
         if (order.latest_settlement_date + claims_interval > current) {
             return;
         }
-        if (order.cancel_date != time_point_sec(current_time_point()) && order.cancel_date + claims_interval < current) {
+        if (order.cancel_date != time_point_sec() && order.cancel_date + claims_interval < current) {
              order.state = OrderStatePreCancel;
         }
         update_order_asset(order, OrderStateDeliver, claims_interval);
@@ -82,12 +82,15 @@ void token::change_order(dmc_order& order, const dmc_challenge& challenge, time_
         if (order.latest_settlement_date + claims_interval > current) {
             return;
         }
+        auto dmc_pledge = extended_asset(order.price.quantity.amount / 2, (order.price.get_extended_symbol()));
+        if ( order.lock_pledge.quantity.amount == 0) {
+            return;
+        } 
         maker_snapshot_table  maker_snapshot_tbl(get_self(), get_self().value);
         auto iter = maker_snapshot_tbl.find(order.order_id);
         check(iter != maker_snapshot_tbl.end(), "cannot find miner in dmc maker");
         auto user_rsi = extended_asset(round(double(order.price.quantity.amount) * pow(10, rsi_sym.get_symbol().precision() - order.price.get_extended_symbol().get_symbol().precision())), rsi_sym);
         auto miner_rsi_pledge = extended_asset(round(user_rsi.quantity.amount * (1 + iter->rate / 100.0)) / 2, rsi_sym);
-        auto dmc_pledge = extended_asset(order.price.quantity.amount / 2, (order.price.get_extended_symbol()));
         
         if (order.lock_pledge >= dmc_pledge) {
             order.lock_pledge -= dmc_pledge;
@@ -97,6 +100,12 @@ void token::change_order(dmc_order& order, const dmc_challenge& challenge, time_
         if (order.miner_lock_rsi >= miner_rsi_pledge) {
             order.miner_lock_rsi -= miner_rsi_pledge;
             order.miner_rsi += miner_rsi_pledge;
+        }
+        if (order.lock_pledge < dmc_pledge) {
+            order.settlement_pledge += order.lock_pledge;
+            order.lock_pledge = extended_asset(0, order.lock_pledge.get_extended_symbol());
+            order.miner_rsi += order.miner_lock_rsi;
+            order.miner_lock_rsi -= extended_asset(0, order.miner_lock_rsi.get_extended_symbol());
         }
     }
 }
@@ -116,30 +125,46 @@ void token::update_order(dmc_order& order, const dmc_challenge& challenge, name 
     }
 }
 
-void token::generate_maker_snapshot(uint64_t order_id, uint64_t bill_id, name miner, name payer) {
+void token::generate_maker_snapshot(uint64_t order_id, uint64_t bill_id, name miner, name payer, bool reset) {
     dmc_makers maker_tbl(get_self(), get_self().value);
     auto maker_iter = maker_tbl.find(miner.value);
     check(maker_iter != maker_tbl.end(), "can't find maker pool");
-    double r = std::round(maker_iter->current_rate * 100 / get_avg_price());
+    double r = std::floor(maker_iter->current_rate * 100 / get_avg_price());
 
     dmc_maker_pool dmc_pool(get_self(), miner.value);
     std::vector<maker_lp_pool> lps;
+    std::vector<maker_pool> changed;
     for (auto iter = dmc_pool.begin(); iter != dmc_pool.end(); iter++) {
         lps.emplace_back(maker_lp_pool{
             .owner = iter->owner,
             .ratio = iter->weight / maker_iter->total_weight,
         });
+        // if maker pool is empty, set all maker pool weight to 0
+        if (reset) {
+            dmc_pool.modify(iter, payer, [&](auto& m) {
+                m.weight = 0;
+            });
+            changed.push_back(*iter);
+        }
     }
+
+    maker_snapshot snapshot_info = {
+        .order_id = order_id,
+        .miner = maker_iter->miner,
+        .bill_id = bill_id,
+        .rate = r,
+        .lps = lps
+    };
 
     maker_snapshot_table  maker_snapshot_tbl(get_self(), get_self().value);
     check(maker_snapshot_tbl.find(order_id) == maker_snapshot_tbl.end(), "order snapshot already exists");
     maker_snapshot_tbl.emplace(payer, [&](auto& mst) {
-        mst.order_id = order_id;
-        mst.miner = maker_iter->miner;
-        mst.bill_id = bill_id;
-        mst.rate = r;
-        mst.lps = lps;
+        mst = snapshot_info;
     });
+    SEND_INLINE_ACTION(*this, makersnaprec, { _self, "active"_n }, { snapshot_info });
+    if(reset) {
+        SEND_INLINE_ACTION(*this, makerpoolrec, {_self, "active"_n}, {miner, changed});
+    }
 }
 
 extended_asset token::distribute_lp_pool(uint64_t order_id, extended_asset pledge, extended_asset challenge_pledge, name payer, OrderReceiptType rec_type) {
@@ -165,7 +190,8 @@ extended_asset token::distribute_lp_pool(uint64_t order_id, extended_asset pledg
     }
 
     auto sub_pledge = extended_asset(0, pledge.get_extended_symbol());
-
+    std::vector<maker_pool> pool_info;
+    std::vector<distribute_maker_snapshot> distribute_info;
     dmc_maker_pool dmc_pool(get_self(), miner.value);
     for (auto iter = snapshot_iter->lps.begin(); iter != snapshot_iter->lps.end(); iter++) {
         auto owner_pledge = extended_asset(std::floor(iter->ratio * pledge.quantity.amount), pledge.get_extended_symbol());
@@ -175,9 +201,12 @@ extended_asset token::distribute_lp_pool(uint64_t order_id, extended_asset pledg
             dmc_pool.modify(pool_iter, payer, [&](auto& p) {
                 p.weight = p.weight + owner_weight;
             });
+            pool_info.emplace_back(*pool_iter);
+            distribute_info.push_back({iter->owner, owner_pledge, MakerDistributePool});
         } else {
             add_balance(iter->owner, owner_pledge, payer);
             sub_pledge += owner_pledge;
+            distribute_info.push_back({iter->owner, owner_pledge, MakerDistributeAccount});
         }
     }
 
@@ -189,7 +218,10 @@ extended_asset token::distribute_lp_pool(uint64_t order_id, extended_asset pledg
         m.total_staked = new_total;
         m.current_rate = r;
     });
-    SEND_INLINE_ACTION(*this, makercharec, { _self, "active"_n }, { _self, miner, pledge - sub_pledge, MakerReceiptClaim });
+
+    SEND_INLINE_ACTION(*this, makerecord, { _self, "active"_n }, { *maker_iter });
+    SEND_INLINE_ACTION(*this, makerpoolrec, { _self, "active"_n }, { miner, pool_info });
+    SEND_INLINE_ACTION(*this, dismakerec, { _self, "active"_n }, { order_id, pledge - sub_pledge, distribute_info });
     return remain_pay;
 }
 
@@ -343,6 +375,7 @@ void token::cancelorder(name sender, uint64_t order_id) {
         order_info.lock_pledge = extended_asset(0, order_info.lock_pledge.get_extended_symbol());
         order_info.user_pledge = extended_asset(0, order_info.user_pledge.get_extended_symbol());
         order_info.deposit = extended_asset(0, order_info.deposit.get_extended_symbol());
+        order_info.cancel_date = time_point_sec(current_time_point());
         add_balance(order_info.user, order_info.lock_pledge + order_info.user_pledge + order_info.deposit, sender);
         SEND_INLINE_ACTION(*this, assetrec, { _self, "active"_n },
         { order_id, { order_info.lock_pledge, order_info.user_pledge, order_info.deposit }, order_info.user,  ACC_TYPE_USER, OrderReceiptUser});

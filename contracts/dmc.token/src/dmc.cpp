@@ -91,7 +91,7 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
     extended_asset user_to_pay = get_asset_by_amount<double, std::ceil>(dmc_amount, dmc_sym);
 
     // deposit
-    extended_asset user_to_deposit = extended_asset(std::round(user_to_pay.quantity.amount * ust->deposit_ratio), dmc_sym);
+    extended_asset user_to_deposit = extended_asset(std::floor(user_to_pay.quantity.amount * ust->deposit_ratio), dmc_sym);
     check(reserve >= user_to_pay + user_to_deposit, "reserve can't pay first time");
     sub_balance(owner, reserve);
 
@@ -116,7 +116,7 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
     auto maker_iter = maker_tbl.find(miner.value);
     check(maker_iter != maker_tbl.end(), "can't find maker pool");
     
-    double r = std::round(maker_iter->current_rate * 100 / get_avg_price()) / 100.0;
+    double r = std::floor(maker_iter->current_rate * 100 / get_avg_price()) / 100.0;
     auto miner_lock_dmc = extended_asset(user_to_pay.quantity.amount * r, user_to_pay.get_extended_symbol());
     check(maker_iter->total_staked >= miner_lock_dmc, "not enough stake quantity");
     dmc_order order_info = {
@@ -161,14 +161,14 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
 
     SEND_INLINE_ACTION(*this, assetrec, { _self, "active"_n }, { order_id, { reserve }, order_info.user,  ACC_TYPE_USER, OrderReceiptOrder});
     
-    generate_maker_snapshot(order_info.order_id, bill_id, order_info.miner, owner);
     sub_stats(asset);
     change_pst(miner, -asset);
     maker_tbl.modify(maker_iter, owner, [&](auto& m) {
         m.current_rate = cal_current_rate(m.total_staked - miner_lock_dmc, miner);
         m.total_staked -= miner_lock_dmc;
     });
-    
+
+    generate_maker_snapshot(order_info.order_id, bill_id, order_info.miner, owner, maker_iter->total_staked.quantity.amount == 0);
     trace_price_history(price, bill_id);
     token::orderrec_action orderrec_act{ token_account, { _self, active_permission } };
     orderrec_act.send(order_info);
@@ -200,7 +200,6 @@ void token::increase(name owner, extended_asset asset, name miner)
                 m.benchmark_stake_rate = get_dmc_config("bmrate"_n, default_benchmark_stake_rate);
             });
 
-            SEND_INLINE_ACTION(*this, makercharec, { _self, "active"_n }, { owner, miner, asset, MakerReceiptIncrease });
             p_iter = dmc_pool.emplace(owner, [&](auto& p) {
                 p.owner = owner;
                 p.weight = static_weights;
@@ -208,40 +207,52 @@ void token::increase(name owner, extended_asset asset, name miner)
         } else {
             check(false, "no such record");
         }
+    } else if (iter->total_staked.quantity.amount == 0) {
+        check(owner == miner, "only miner can stake now");
+        maker_tbl.modify(iter, owner, [&](auto& m) {
+            m.current_rate = cal_current_rate(asset, miner);
+            m.total_weight = static_weights;
+            m.total_staked = asset;
+        });
+        dmc_pool.modify(p_iter, owner, [&](auto& p) {
+            p.weight = static_weights;
+        });
     } else {
         extended_asset new_total = iter->total_staked + asset;
         double new_weight = (double)asset.quantity.amount / iter->total_staked.quantity.amount * iter->total_weight;
         double total_weight = iter->total_weight + new_weight;
         check(new_weight > 0, "invalid new weight");
-        check(new_weight / total_weight > 0.0001, "increase too lower");
+        // check(new_weight / total_weight > 0.0001, "the quantity of increase is insufficient.");
 
-        // TODO: 1% 
         double r = cal_current_rate(new_total, miner);
-        maker_tbl.modify(iter, get_self(), [&](auto& m) {
+        maker_tbl.modify(iter, owner, [&](auto& m) {
             m.total_weight = total_weight;
             m.total_staked = new_total;
             m.current_rate = r;
         });
 
-        SEND_INLINE_ACTION(*this, makercharec, { _self, "active"_n }, { owner, miner, asset, MakerReceiptIncrease });
-
         if (p_iter != dmc_pool.end()) {
-            dmc_pool.modify(p_iter, get_self(), [&](auto& s) {
+            dmc_pool.modify(p_iter, owner, [&](auto& s) {
                 s.weight += new_weight;
             });
         } else {
-            dmc_pool.emplace(owner, [&](auto& p) {
+            p_iter = dmc_pool.emplace(owner, [&](auto& p) {
                 p.owner = owner;
                 p.weight = new_weight;
             });
         }
 
         auto miner_iter = dmc_pool.find(miner.value);
-        check(miner_iter != dmc_pool.end(), ""); // never happened
+        check(miner_iter != dmc_pool.end(), "miner can not destroy maker"); // never happened
         check(miner_iter->weight / total_weight >= iter->miner_rate, "exceeding the maximum rate");
+        
+        // The total amount staked by the lp must be greater than one percent of the stakable amount
+        if (miner != owner) {
+            check(p_iter->weight / (total_weight * (1 - iter->miner_rate)) >= 0.01, "the quantity of increase is insufficient.");
+        }
     }
-    SEND_INLINE_ACTION(*this, makersnap, {_self, "active"_n}, {*iter});
-    SEND_INLINE_ACTION(*this, makerpoolrec, {_self, "active"_n}, {miner, *p_iter});
+    SEND_INLINE_ACTION(*this, makerecord, {_self, "active"_n}, {*iter});
+    SEND_INLINE_ACTION(*this, makerpoolrec, {_self, "active"_n}, {miner, {*p_iter} });
 }
 
 void token::redemption(name owner, double rate, name miner)
@@ -273,7 +284,7 @@ void token::redemption(name owner, double rate, name miner)
             owner_weight = pool_begin->weight;
         }
     } else {
-        dmc_pool.modify(p_iter, get_self(), [&](auto& s) {
+        dmc_pool.modify(p_iter, owner, [&](auto& s) {
             s.weight -= owner_weight;
         });
         check(p_iter->weight > 0, "negative pool weight amount");
@@ -298,7 +309,7 @@ void token::redemption(name owner, double rate, name miner)
         check(miner_rate >= iter->miner_rate, "below the minimum rate");
     }
     check(rede_quantity.quantity.amount > 0, "dust attack detected");
-    lock_add_balance(owner, rede_quantity, time_point_sec(current_time_point() +  eosio::days(3 * day_sec)), owner);
+    lock_add_balance(owner, rede_quantity, time_point_sec(current_time_point() +  eosio::days(3)), owner);
     SEND_INLINE_ACTION(*this, redeemrec, { get_self(), "active"_n }, { owner, miner, rede_quantity });
     if (total_staked.quantity.amount == 0) {
         maker_tbl.erase(iter);
@@ -314,14 +325,13 @@ void token::redemption(name owner, double rate, name miner)
         check(iter->total_weight >= 0, "negative total weight amount");
     }
 
-    SEND_INLINE_ACTION(*this, makercharec, { _self, "active"_n }, { owner, miner, -rede_quantity, MakerReceiptRedemption });
-
-    if (rate != 1)
-        check(p_iter->weight / iter->total_weight > 0.0001, "The remaining weight is too low");
+    if (rate != 1) {
+        check(p_iter->weight / (iter->total_weight * (1 - iter->miner_rate)) >= 0.01, "The remaining weight is too low");
+    }
     
     // TODO: deal the case that the miner redeem all
-    SEND_INLINE_ACTION(*this, makersnap, {_self, "active"_n}, {*iter});
-    SEND_INLINE_ACTION(*this, makerpoolrec, {_self, "active"_n}, {miner, *p_iter});
+    SEND_INLINE_ACTION(*this, makerecord, {_self, "active"_n}, {*iter});
+    SEND_INLINE_ACTION(*this, makerpoolrec, {_self, "active"_n}, {miner, {*p_iter} });
 }
 
 void token::mint(name owner, extended_asset asset)
@@ -354,7 +364,7 @@ void token::mint(name owner, extended_asset asset)
         m.current_rate = r;
     });
 
-    SEND_INLINE_ACTION(*this, makersnap, {_self, "active"_n}, {iter});
+    SEND_INLINE_ACTION(*this, makerecord, {_self, "active"_n}, {iter});
 }
 
 void token::setmakerrate(name owner, double rate)
@@ -373,7 +383,7 @@ void token::setmakerrate(name owner, double rate)
         s.miner_rate = rate;
     });
 
-    SEND_INLINE_ACTION(*this, makersnap, {_self, "active"_n}, {iter});
+    SEND_INLINE_ACTION(*this, makerecord, {_self, "active"_n}, {iter});
 }
 
 void token::setmakerbstr(name owner, uint64_t self_benchmark_stake_rate)
@@ -386,7 +396,7 @@ void token::setmakerbstr(name owner, uint64_t self_benchmark_stake_rate)
     check(miner_iter != dmc_pool.end(), "miner can not destroy maker"); // never happened
     time_point_sec now = time_point_sec(current_time_point());
 
-    check(now >= iter.rate_updated_at + maker_change_rate_interval, "change rate interval too short");
+    check(now >= iter.rate_updated_at + get_dmc_config("rateinter"_n, default_maker_change_rate_interval), "change rate interval too short");
 
     // no limit if set up rate first time, only >= m
     if (iter.rate_updated_at == time_point_sec(0)) {
@@ -403,7 +413,7 @@ void token::setmakerbstr(name owner, uint64_t self_benchmark_stake_rate)
         s.rate_updated_at = now;
     });
 
-    SEND_INLINE_ACTION(*this, makersnap, {_self, "active"_n}, {iter});
+    SEND_INLINE_ACTION(*this, makerecord, {_self, "active"_n}, {iter});
 }
 
 double token::cal_current_rate(extended_asset dmc_asset, name owner)
@@ -500,7 +510,6 @@ void token::liquidation(string memo)
             s.total_staked = new_staked;
             s.current_rate = new_rate;
         });
-        SEND_INLINE_ACTION(*this, makercharec, { _self, "active"_n }, { _self, miner, -dmc, MakerReceiptLiquidation });
         add_balance(system_account, dmc, dmc_account);
         SEND_INLINE_ACTION(*this, liqrec, { _self, "active"_n }, { miner, pst, dmc });
     }
@@ -721,7 +730,7 @@ void token::allocation(string memo)
             break;
         } else {
             auto duration_time = now_time.sec_since_epoch() - it->last_foundation_released_at.sec_since_epoch();
-            
+
             if (duration_time / 86400 == 0) // 24 * 60 * 60
                 break;
             auto remaining_time = it->end_at.sec_since_epoch() - it->last_foundation_released_at.sec_since_epoch();

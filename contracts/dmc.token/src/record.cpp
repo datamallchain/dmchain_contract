@@ -48,11 +48,6 @@ void token::incentiverec(name owner, extended_asset inc, uint64_t bill_id)
     require_auth(_self);
 }
 
-void token::orderclarec(name owner, extended_asset quantity, uint64_t bill_id, uint64_t order_id)
-{
-    require_auth(_self);
-}
-
 void token::redeemrec(name owner, name miner, extended_asset asset)
 {
     require_auth(_self);
@@ -83,11 +78,6 @@ void token::makerliqrec(name miner, uint64_t bill_id, extended_asset sub_pst)
     require_auth(_self);
 }
 
-void token::makercharec(name sender, name miner, extended_asset changed, MakerReceiptType type)
-{
-    require_auth(_self);
-}
-
 void token::orderrec(dmc_order order_info)
 {
     require_auth(_self);
@@ -103,16 +93,25 @@ void token::billsnap(bill_record bill_info)
     require_auth(_self);
 }
 
-void token::makersnap(dmc_maker maker_info)
+void token::makerecord(dmc_maker maker_info)
 {
     require_auth(_self);
 }
 
-void token::makerpoolrec(name miner, maker_pool pool_info)
+void token::makerpoolrec(name miner, std::vector<maker_pool> pool_info)
 {
      require_auth(_self);
 }
+
 void token::assetrec(uint64_t order_id, std::vector<extended_asset> changed, name owner, AccountType acc_type, OrderReceiptType rec_type) {
+    require_auth(_self);
+}
+
+void token::makersnaprec(maker_snapshot maker_snapshot) {
+    require_auth(_self);
+}
+
+void token::dismakerec(uint64_t order_id, extended_asset total, std::vector<distribute_maker_snapshot> distribute_info) {
     require_auth(_self);
 }
 

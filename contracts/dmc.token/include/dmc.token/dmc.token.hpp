@@ -51,7 +51,7 @@ constexpr uint64_t default_service_interval = 24 * week_sec;
  * the minimum interval to change the benchmark_stake_rate
  * 7 days
 */ 
-constexpr uint64_t maker_change_rate_interval = week_sec;
+constexpr uint64_t default_maker_change_rate_interval = week_sec;
 /**
  * the longest time for dmc bill claims
  * 7 days
@@ -136,12 +136,18 @@ enum e_maker_receipt_type {
     MakerReceiptLiquidation = 5,
 };
 
+enum e_maker_distribute_type {
+    MakerDistributeAccount = 1,
+    MakerDistributePool = 2,
+};
+
 typedef uint8_t OrderState;
 typedef uint8_t ChallengeState;
 
 typedef uint8_t nft_type;
 typedef uint8_t OrderReceiptType;
 typedef uint8_t MakerReceiptType;
+typedef uint8_t MakerDistributeType;
 
 CONTRACT token : public contract {
 
@@ -284,7 +290,7 @@ private:
     extended_asset allocation_abo(time_point_sec now_time);
 
     extended_asset allocation_penalty(time_point_sec now_time);
-
+    
     void increase_penalty(extended_asset quantity);
 
 public:
@@ -298,12 +304,9 @@ public:
 
 public:
     ACTION incentiverec(name owner, extended_asset inc, uint64_t bill_id);
-    ACTION orderclarec(name owner, extended_asset quantity, uint64_t bill_id, uint64_t order_id);
     ACTION redeemrec(name owner, name miner, extended_asset asset);
     ACTION liqrec(name miner, extended_asset pst_asset, extended_asset dmc_asset);
     ACTION makerliqrec(name miner, uint64_t bill_id, extended_asset sub_pst);
-    ACTION makercharec(name sender, name miner, extended_asset changed, MakerReceiptType type);
-
 public:
     ACTION nftsymrec(uint64_t symbol_id, extended_symbol nft_symbol, std::string symbol_uri, nft_type type);
     ACTION nftrec(uint64_t symbol_id, uint64_t nft_id, std::string nft_uri, std::string nft_name, std::string extra_data, extended_asset quantity);
@@ -702,12 +705,20 @@ public:
     };
     typedef eosio::multi_index<"makesnapshot"_n, maker_snapshot> maker_snapshot_table;
 
+    struct distribute_maker_snapshot {
+        name lp;
+        extended_asset quantity;
+        MakerDistributeType type;
+    };
+
 public:
     ACTION orderrec(dmc_order order_info);
     ACTION challengerec(dmc_challenge challenge_info);
     ACTION billsnap(bill_record bill_info);
-    ACTION makersnap(dmc_maker maker_info);
-    ACTION makerpoolrec(name miner, maker_pool pool_info);
+    ACTION makerecord(dmc_maker maker_info);
+    ACTION makerpoolrec(name miner, std::vector<maker_pool> pool_info);
+    ACTION makersnaprec(maker_snapshot maker_snapshot);
+    ACTION dismakerec(uint64_t order_id, extended_asset total, std::vector<distribute_maker_snapshot> distribute_info);
     ACTION assetrec(uint64_t order_id, std::vector<extended_asset> changed, name owner, AccountType acc_type, OrderReceiptType rec_type);
 
 private:
@@ -730,7 +741,7 @@ private:
     double cal_current_rate(extended_asset dmc_asset, name owner);
 
 private:
-    void generate_maker_snapshot(uint64_t order_id, uint64_t bill_id, name miner, name payer);
+    void generate_maker_snapshot(uint64_t order_id, uint64_t bill_id, name miner, name payer, bool reset = false);
     void update_order_asset(dmc_order& order, OrderState new_state, uint64_t claims_interval);
     void change_order(dmc_order& order, const dmc_challenge& challenge, time_point_sec current, uint64_t claims_interval, name payer);
     void update_order(dmc_order& order, const dmc_challenge& challenge, name payer);
