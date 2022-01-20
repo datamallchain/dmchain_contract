@@ -7,27 +7,12 @@
 
 namespace eosio {
 
-void token::receipt(extended_asset in, extended_asset out, extended_asset fee)
-{
-    require_auth(_self);
-}
-
 void token::outreceipt(name owner, extended_asset x, extended_asset y)
 {
     require_auth(_self);
 }
 
 void token::traderecord(name owner, name oppo, extended_asset from, extended_asset to, extended_asset fee, uint64_t bid_id)
-{
-    require_auth(_self);
-}
-
-void token::orderchange(uint64_t bid_id, uint8_t state)
-{
-    require_auth(_self);
-}
-
-void token::bidrec(uint64_t price, extended_asset quantity, extended_asset filled, uint64_t bid_id)
 {
     require_auth(_self);
 }
@@ -73,7 +58,12 @@ void token::liqrec(name miner, extended_asset pst_asset, extended_asset dmc_asse
     require_auth(_self);
 }
 
-void token::makerliqrec(name miner, uint64_t bill_id, extended_asset sub_pst)
+void token::billliqrec(name miner, uint64_t bill_id, extended_asset sub_pst)
+{
+    require_auth(_self);
+}
+
+void token::currliqrec(name miner, extended_asset sub_pst)
 {
     require_auth(_self);
 }
@@ -100,19 +90,27 @@ void token::makerecord(dmc_maker maker_info)
 
 void token::makerpoolrec(name miner, std::vector<maker_pool> pool_info)
 {
-     require_auth(_self);
-}
-
-void token::assetrec(uint64_t order_id, std::vector<extended_asset> changed, name owner, AccountType acc_type, OrderReceiptType rec_type) {
     require_auth(_self);
 }
 
-void token::makersnaprec(maker_snapshot maker_snapshot) {
+void token::assetrec(uint64_t order_id, std::vector<extended_asset> changed, name owner, AssetReceiptType rec_type)
+{
     require_auth(_self);
 }
 
-void token::dismakerec(uint64_t order_id, extended_asset total, std::vector<distribute_maker_snapshot> distribute_info) {
+void token::orderassrec(uint64_t order_id, std::vector<extended_asset> changed, name owner, AccountType acc_type, OrderReceiptType rec_type, time_point_sec exec_date)
+{
     require_auth(_self);
 }
 
-} /// namespace eosio
+void token::makersnaprec(maker_snapshot maker_snapshot)
+{
+    require_auth(_self);
+}
+
+void token::dismakerec(uint64_t order_id, extended_asset total, std::vector<distribute_maker_snapshot> distribute_info)
+{
+    require_auth(_self);
+}
+
+}  // namespace eosio

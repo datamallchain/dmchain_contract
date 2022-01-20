@@ -450,7 +450,7 @@ extended_asset token::exchange_from_uniswap(extended_asset add_balance)
     extended_asset to_user(0, dmc_sym);
     if (add_balance.get_extended_symbol() == rsi_sym) {
         rsi_quantity += add_balance;
-
+        real_rsi_quantity = get_real_asset(rsi_quantity);
         double real_dmc_quantity = real_market_total / real_rsi_quantity;
         extended_asset new_dmc_quantity = get_asset_by_amount<double, std::round>(real_dmc_quantity, dmc_sym);
         
@@ -459,7 +459,7 @@ extended_asset token::exchange_from_uniswap(extended_asset add_balance)
         dmc_quantity = new_dmc_quantity;
     } else if (add_balance.get_extended_symbol() == dmc_sym) {
         dmc_quantity += add_balance;
-
+        real_dmc_quantity = get_real_asset(dmc_quantity);
         double real_rsi_quantity = real_market_total / real_dmc_quantity;
         extended_asset new_rsi_quantity = get_asset_by_amount<double, std::round>(real_rsi_quantity, rsi_sym);
 
