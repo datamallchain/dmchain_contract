@@ -53,17 +53,12 @@ void token::nftaccrec(uint64_t family_id, uint64_t nft_id, name owner, extended_
     require_auth(_self);
 }
 
-void token::liqrec(name miner, extended_asset pst_asset, extended_asset dmc_asset)
+void token::makerliqrec(name miner, extended_asset pst_asset, extended_asset dmc_asset)
 {
     require_auth(_self);
 }
 
 void token::billliqrec(name miner, uint64_t bill_id, extended_asset sub_pst)
-{
-    require_auth(_self);
-}
-
-void token::currliqrec(name miner, extended_asset sub_pst)
 {
     require_auth(_self);
 }
@@ -90,27 +85,19 @@ void token::makerecord(dmc_maker maker_info)
 
 void token::makerpoolrec(name miner, std::vector<maker_pool> pool_info)
 {
+     require_auth(_self);
+}
+
+void token::assetrec(uint64_t order_id, std::vector<extended_asset> changed, name owner, AccountType acc_type, OrderReceiptType rec_type) {
     require_auth(_self);
 }
 
-void token::assetrec(uint64_t order_id, std::vector<extended_asset> changed, name owner, AssetReceiptType rec_type)
-{
+void token::makersnaprec(maker_snapshot maker_snapshot) {
     require_auth(_self);
 }
 
-void token::orderassrec(uint64_t order_id, std::vector<extended_asset> changed, name owner, AccountType acc_type, OrderReceiptType rec_type, time_point_sec exec_date)
-{
+void token::dismakerec(uint64_t order_id, extended_asset total, std::vector<distribute_maker_snapshot> distribute_info) {
     require_auth(_self);
 }
 
-void token::makersnaprec(maker_snapshot maker_snapshot)
-{
-    require_auth(_self);
-}
-
-void token::dismakerec(uint64_t order_id, extended_asset total, std::vector<distribute_maker_snapshot> distribute_info)
-{
-    require_auth(_self);
-}
-
-}  // namespace eosio
+} /// namespace eosio

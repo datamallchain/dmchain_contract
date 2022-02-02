@@ -28,7 +28,7 @@ static const name system_account = "datamall"_n;
 static const name empty_account = name { 0 };
 static constexpr symbol fee_sym = symbol(symbol_code("FEE"), 4);
 static const extended_symbol pst_sym = extended_symbol(symbol(symbol_code("PST"), 0), system_account);
-static const extended_symbol rsi_sym = extended_symbol(symbol(symbol_code("RSI"), 4), system_account);
+static const extended_symbol rsi_sym = extended_symbol(symbol(symbol_code("RSI"), 8), system_account);
 static const extended_symbol dmc_sym = extended_symbol(symbol(symbol_code("DMC"), 4), system_account);
 constexpr uint64_t day_sec = 24 * 3600;
 constexpr uint64_t week_sec = 7 * day_sec;
@@ -38,7 +38,6 @@ constexpr uint32_t identifying_code_mask = 0x3FFFFFF;
 constexpr uint64_t default_dmc_challenge_interval = day_sec;
 constexpr uint64_t default_phishing_interval = day_sec;
 constexpr uint64_t default_initial_price = 10;
-constexpr uint64_t default_id_start = 1;
 /**
  * the longest service time for bill / order
  * 24 weeks
@@ -110,30 +109,21 @@ enum e_account_type {
 typedef uint8_t AccountType;
 
 enum e_order_receipt_type {
-    OrderReceiptAddReserve = 1,
-    OrderReceiptSubReserve = 2,
-    OrderReceiptRenew = 3,
+    OrderReceiptUpdate = 1,
+    OrderReceiptClaim = 2,
+    OrderReceiptUser = 3,
     OrderReceiptChallengeReq = 4,
     OrderReceiptChallengeAns = 5,
     OrderReceiptChallengeArb = 6,
-    OrderReceiptPayChallengeRet = 7,
-    OrderReceiptDeposit = 8,
+    OrderReceiptChallengePayRet = 7,
+    OrderReceiptChallengePayReward = 8,
     OrderReceiptLockRet = 9,
-    OrderReceiptReward = 10,
-    OrderReceiptEnd = 11,
+    OrderReceiptCancel = 10,
+    OrderReceiptOrder = 11,
+    OrderReceiptDeposit = 12,
+    OrderReceiptMinerLock = 13,
+    OrderReceiptEnd = 14,
 };
-
-enum e_asset_receipt_type {
-    AssetReceiptAddReserve = 1,
-    AssetReceiptSubReserve = 2,
-    AssetReceiptDeposit = 3,
-    AssetReceiptPayChallenge = 4,
-    AssetReceiptClaim = 5,
-    AssetReceiptCancel = 6,
-    AssetReceiptMinerLock = 7,
-    AssetReceiptEnd = 8,
-};
-
 
 enum e_maker_receipt_type {
     MakerReceiptClaim = 1,
@@ -141,7 +131,6 @@ enum e_maker_receipt_type {
     MakerReceiptIncrease = 3,
     MakerReceiptRedemption = 4,
     MakerReceiptLiquidation = 5,
-    MakerReceiptLock = 6,
 };
 
 enum e_maker_distribute_type {
@@ -154,7 +143,6 @@ typedef uint8_t ChallengeState;
 
 typedef uint8_t nft_type;
 typedef uint8_t OrderReceiptType;
-typedef uint8_t AssetReceiptType;
 typedef uint8_t MakerReceiptType;
 typedef uint8_t MakerDistributeType;
 
@@ -291,7 +279,7 @@ private:
     extended_asset get_asset_by_amount(T amount, extended_symbol symbol);
 
     void uniswapdeal(name owner, extended_asset& market_from, extended_asset& market_to, extended_asset from, extended_asset to_sym, uint64_t primary, double price, name rampay);
-    
+
     extended_asset exchange_from_uniswap(extended_asset add_balance);
 
     extended_asset get_dmc_by_vrsi(extended_asset rsi_quantity);
@@ -311,13 +299,8 @@ public:
 public:
     ACTION incentiverec(name owner, extended_asset inc, uint64_t bill_id);
     ACTION redeemrec(name owner, name miner, extended_asset asset);
-
-    ACTION liqrec(name miner, extended_asset pst_asset, extended_asset dmc_asset);
-
+    ACTION makerliqrec(name miner, extended_asset pst_asset, extended_asset dmc_asset);
     ACTION billliqrec(name miner, uint64_t bill_id, extended_asset sub_pst);
-
-    ACTION currliqrec(name miner, extended_asset sub_pst);
-
 public:
     ACTION nftsymrec(uint64_t symbol_id, extended_symbol nft_symbol, std::string symbol_uri, nft_type type);
     ACTION nftrec(uint64_t symbol_id, uint64_t nft_id, std::string nft_uri, std::string nft_name, std::string extra_data, extended_asset quantity);
@@ -346,7 +329,6 @@ private:
 
 private:
     uint64_t get_dmc_config(name key, uint64_t default_value);
-    void set_dmc_config(name key, uint64_t value);
     double get_dmc_rate(uint64_t rate_value);
     double get_avg_price();
 
@@ -557,6 +539,14 @@ public:
     };
     typedef eosio::multi_index<"penaltystats"_n, penalty_stats> penaltystats;
 
+    struct stake_id_args {
+        name owner;
+        extended_asset quantity;
+        uint64_t price;
+        time_point_sec now;
+        string memo;
+    };
+
     struct order_id_args {
         name owner;
         name miner;
@@ -645,15 +635,17 @@ public:
         double total_weight;
         extended_asset total_staked;
         // m' = benchmark_stake_rate / 100.0
-        // n' = m' * 0.6
+        // n' = n' * 0.6
         uint64_t benchmark_stake_rate;
         time_point_sec rate_updated_at;
+        // if pst is ordered, the DMC which mint to PST will be locked, PST retired.
+        // DMC = PST * price * n' (n' = m' * 0.6)
+        extended_asset locked_staked;
 
         uint64_t primary_key() const { return miner.value; }
         uint64_t by_m() const { return benchmark_stake_rate; }
         uint64_t get_n() const { return benchmark_stake_rate * 0.6; }
-        double get_real_m() const { return benchmark_stake_rate / 100.0; }
-        double by_rate() const { return current_rate / get_n(); }
+        double by_rate() const { return current_rate - get_n() / 100.0; }
     };
     typedef eosio::multi_index<"dmcmaker"_n, dmc_maker,
         indexed_by<"byrate"_n, const_mem_fun<dmc_maker, double, &dmc_maker::by_rate>>,
@@ -701,7 +693,7 @@ public:
         uint64_t order_id;
         name miner;
         uint64_t bill_id;
-        uint64_t rate;
+        double rate;
         std::vector<maker_lp_pool> lps;
         uint64_t primary_key() const { return order_id; }
     };
@@ -721,8 +713,7 @@ public:
     ACTION makerpoolrec(name miner, std::vector<maker_pool> pool_info);
     ACTION makersnaprec(maker_snapshot maker_snapshot);
     ACTION dismakerec(uint64_t order_id, extended_asset total, std::vector<distribute_maker_snapshot> distribute_info);
-    ACTION assetrec(uint64_t order_id, std::vector<extended_asset> changed, name owner, AssetReceiptType rec_type);
-    ACTION orderassrec(uint64_t order_id, std::vector<extended_asset> changed, name owner, AccountType acc_type, OrderReceiptType rec_type, time_point_sec exec_date);
+    ACTION assetrec(uint64_t order_id, std::vector<extended_asset> changed, name owner, AccountType acc_type, OrderReceiptType rec_type);
 
 private:
     inline static name get_foundation(name issuer)
@@ -741,14 +732,14 @@ private:
 
 private:
     uint64_t calbonus(name owner, uint64_t primary, name ram_payer);
-    double cal_current_rate(extended_asset dmc_asset, name owner, double real_m);
+    double cal_current_rate(extended_asset dmc_asset, name owner);
 
 private:
-    void generate_maker_snapshot(uint64_t order_id, uint64_t bill_id, name miner, name payer, uint64_t r, bool reset = false);
+    void generate_maker_snapshot(uint64_t order_id, uint64_t bill_id, name miner, name payer, bool reset = false);
     void update_order_asset(dmc_order& order, OrderState new_state, uint64_t claims_interval);
     void change_order(dmc_order& order, const dmc_challenge& challenge, time_point_sec current, uint64_t claims_interval, name payer);
     void update_order(dmc_order& order, const dmc_challenge& challenge, name payer);
-    extended_asset distribute_lp_pool(uint64_t order_id, extended_asset pledge, extended_asset challenge_pledge, name payer,  AssetReceiptType rec_type);
+    extended_asset distribute_lp_pool(uint64_t order_id, extended_asset pledge, extended_asset challenge_pledge, name payer,  OrderReceiptType rec_type);
     void phishing_challenge();
 };
 

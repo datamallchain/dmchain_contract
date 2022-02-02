@@ -24,7 +24,9 @@ void token::bill(name owner, extended_asset asset, double price, time_point_sec 
     sub_balance(owner, asset);
     bill_stats sst(get_self(), owner.value);
 
-    uint64_t bill_id = get_dmc_config("billid"_n, default_id_start);
+    auto hash = sha256<stake_id_args>({ owner, asset, price_t, time_point_sec(current_time_point()), memo });
+    uint64_t bill_id = uint64_t(*reinterpret_cast<const uint64_t*>(&hash));
+
     bill_record bill_info = {
         .bill_id = bill_id,
         .owner = owner,
@@ -36,8 +38,7 @@ void token::bill(name owner, extended_asset asset, double price, time_point_sec 
         .expire_on = expire_on,
         .deposit_ratio = deposit_ratio
     };
-
-    set_dmc_config("billid"_n, bill_id + 1);
+    
     sst.emplace(owner, [&](auto &r) { 
         r = bill_info; 
     });
@@ -103,19 +104,20 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
     });
 
     uint64_t claims_interval = get_dmc_config("claiminter"_n, default_dmc_claims_interval);
-    uint64_t order_id = get_dmc_config("orderid"_n, default_id_start);
+
+    dmc_orders order_tbl(get_self(), get_self().value);
+    auto hash = sha256<order_id_args>({ owner, miner, bill_id, asset, reserve, memo, time_point_sec(current_time_point()) });
+    uint64_t order_id = uint64_t(*reinterpret_cast<const uint64_t*>(&hash));
+    while (order_tbl.find(order_id) != order_tbl.end()) {
+        order_id += 1;
+    }
     
     dmc_makers maker_tbl(get_self(), get_self().value);
     auto maker_iter = maker_tbl.find(miner.value);
     check(maker_iter != maker_tbl.end(), "can't find maker pool");
-
-    dmc_orders order_tbl(get_self(), get_self().value);
-    uint64_t r = std::floor(maker_iter->current_rate * 100.0/ get_avg_price());
-    // r = 5m' if r > 5m'
-    if (r > maker_iter->benchmark_stake_rate * 5) {
-        r = maker_iter->benchmark_stake_rate * 5;
-    }
-    auto miner_lock_dmc = extended_asset(user_to_pay.quantity.amount * (r / 100.0), user_to_pay.get_extended_symbol());
+    
+    double r = std::floor(maker_iter->current_rate * 100 / get_avg_price()) / 100.0;
+    auto miner_lock_dmc = extended_asset(user_to_pay.quantity.amount * r, user_to_pay.get_extended_symbol());
     check(maker_iter->total_staked >= miner_lock_dmc, "not enough stake quantity");
     dmc_order order_info = {
         .order_id = order_id,
@@ -136,7 +138,7 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
         .user_rsi = extended_asset(0, rsi_sym),
         .deposit = user_to_deposit,
         .deposit_valid = deposit_valid,
-        .cancel_date =  time_point_sec(),
+        .cancel_date =  time_point_sec()
     };
     order_tbl.emplace(owner, [&](auto& o) {
         o = order_info;
@@ -156,24 +158,21 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
     challenge_tbl.emplace(owner, [&](auto& c) {
         c = challenge_info;
     });
+
+    SEND_INLINE_ACTION(*this, assetrec, { _self, "active"_n }, { order_id, { reserve }, order_info.user,  ACC_TYPE_USER, OrderReceiptOrder});
     
     sub_stats(asset);
     change_pst(miner, -asset);
     maker_tbl.modify(maker_iter, owner, [&](auto& m) {
-        m.current_rate = cal_current_rate(m.total_staked - miner_lock_dmc, miner, m.get_real_m());
+        m.current_rate = cal_current_rate(m.total_staked - miner_lock_dmc, miner);
         m.total_staked -= miner_lock_dmc;
     });
 
-    generate_maker_snapshot(order_info.order_id, bill_id, order_info.miner, owner, r, maker_iter->total_staked.quantity.amount == 0);
+    generate_maker_snapshot(order_info.order_id, bill_id, order_info.miner, owner, maker_iter->total_staked.quantity.amount == 0);
     trace_price_history(price, bill_id);
-    set_dmc_config("orderid"_n, order_id + 1);
     SEND_INLINE_ACTION(*this, orderrec, { _self, "active"_n }, { order_info });
     SEND_INLINE_ACTION(*this, challengerec, { _self, "active"_n }, { challenge_info });
     SEND_INLINE_ACTION(*this, billsnap, { _self, "active"_n }, { *ust });
-    SEND_INLINE_ACTION(*this, assetrec, { _self, "active"_n }, { order_info.order_id, { reserve }, order_info.user, AssetReceiptAddReserve});
-    SEND_INLINE_ACTION(*this, orderassrec, { _self, "active"_n }, { order_info.order_id, { reserve }, order_info.user,  ACC_TYPE_USER, OrderReceiptAddReserve, time_point_sec(current_time_point())});
-    SEND_INLINE_ACTION(*this, orderassrec, { _self, "active"_n }, { order_info.order_id, { -user_to_deposit }, order_info.user,  ACC_TYPE_USER, OrderReceiptDeposit, time_point_sec(current_time_point())});
-    SEND_INLINE_ACTION(*this, orderassrec, { _self, "active"_n }, { order_info.order_id, { -user_to_pay }, order_info.user,  ACC_TYPE_USER, OrderReceiptRenew, time_point_sec(current_time_point())});
 }
 
 void token::increase(name owner, extended_asset asset, name miner)
@@ -188,16 +187,15 @@ void token::increase(name owner, extended_asset asset, name miner)
     auto iter = maker_tbl.find(miner.value);
     dmc_maker_pool dmc_pool(get_self(), miner.value);
     auto p_iter = dmc_pool.find(owner.value);
-    uint64_t benchmark_stake_rate = get_dmc_config("bmrate"_n, default_benchmark_stake_rate);
     if (iter == maker_tbl.end()) {
         if (owner == miner) {
             iter = maker_tbl.emplace(miner, [&](auto& m) {
                 m.miner = owner;
-                m.current_rate = cal_current_rate(asset, miner, benchmark_stake_rate / 100.0);
+                m.current_rate = cal_current_rate(asset, miner);
                 m.miner_rate = 1;
                 m.total_weight = static_weights;
                 m.total_staked = asset;
-                m.benchmark_stake_rate = benchmark_stake_rate;
+                m.benchmark_stake_rate = get_dmc_config("bmrate"_n, default_benchmark_stake_rate);
             });
 
             p_iter = dmc_pool.emplace(owner, [&](auto& p) {
@@ -210,7 +208,7 @@ void token::increase(name owner, extended_asset asset, name miner)
     } else if (iter->total_staked.quantity.amount == 0) {
         check(owner == miner, "only miner can stake now");
         maker_tbl.modify(iter, owner, [&](auto& m) {
-            m.current_rate = cal_current_rate(asset, miner, m.get_real_m());
+            m.current_rate = cal_current_rate(asset, miner);
             m.total_weight = static_weights;
             m.total_staked = asset;
         });
@@ -224,7 +222,7 @@ void token::increase(name owner, extended_asset asset, name miner)
         check(new_weight > 0, "invalid new weight");
         // check(new_weight / total_weight > 0.0001, "the quantity of increase is insufficient.");
 
-        double r = cal_current_rate(new_total, miner, iter->get_real_m());
+        double r = cal_current_rate(new_total, miner);
         maker_tbl.modify(iter, owner, [&](auto& m) {
             m.total_weight = total_weight;
             m.total_staked = new_total;
@@ -274,11 +272,6 @@ void token::redemption(name owner, double rate, name miner)
 
     bool last_one = false;
     if (rate == 1) {
-        // for tracker
-        dmc_pool.modify(p_iter, owner, [&](auto& s) {
-            s.weight = 0;
-        });
-
         dmc_pool.erase(p_iter);
         auto pool_begin = dmc_pool.begin();
         if (pool_begin == dmc_pool.end()) {
@@ -298,14 +291,15 @@ void token::redemption(name owner, double rate, name miner)
     double total_weight = iter->total_weight - owner_weight;
     extended_asset total_staked = iter->total_staked - rede_quantity;
     double benchmark_stake_rate = get_dmc_rate(iter->benchmark_stake_rate);
-    double r = cal_current_rate(total_staked, miner, iter->get_real_m());
+    double r = cal_current_rate(total_staked, miner);
 
     if (miner == owner) {
         check(r >= benchmark_stake_rate, "current stake rate less than benchmark stake rate, redemption fails");
 
         double miner_rate = 0.0;
         if (total_staked.quantity.amount == 0) {
-            miner_rate = uint64_max;
+            // max_current_rate
+            miner_rate = benchmark_stake_rate * 5;
         } else {
             auto miner_iter = dmc_pool.find(miner.value);
             check(miner_iter != dmc_pool.end(), "miner can only redeem all last");
@@ -334,6 +328,7 @@ void token::redemption(name owner, double rate, name miner)
         check(p_iter->weight / (iter->total_weight * (1 - iter->miner_rate)) >= 0.01, "The remaining weight is too low");
     }
     
+    // TODO: deal the case that the miner redeem all
     SEND_INLINE_ACTION(*this, makerecord, {_self, "active"_n}, {*iter});
     SEND_INLINE_ACTION(*this, makerpoolrec, {_self, "active"_n}, {miner, {*p_iter} });
 }
@@ -361,7 +356,7 @@ void token::mint(name owner, extended_asset asset)
     add_stats(asset);
     add_balance(owner, asset, owner);
     change_pst(owner, asset);
-    double r = cal_current_rate(iter.total_staked, owner, iter.get_real_m());
+    double r = cal_current_rate(iter.total_staked, owner);
     check(r >= benchmark_stake_rate, "current stake rate less than benchmark stake rate, mint fails");
 
     maker_tbl.modify(iter, get_self(), [&](auto& m) {
@@ -420,15 +415,17 @@ void token::setmakerbstr(name owner, uint64_t self_benchmark_stake_rate)
     SEND_INLINE_ACTION(*this, makerecord, {_self, "active"_n}, {iter});
 }
 
-double token::cal_current_rate(extended_asset dmc_asset, name owner, double real_m)
+double token::cal_current_rate(extended_asset dmc_asset, name owner)
 {
     pststats pst_acnts(get_self(), get_self().value);
-    // double r = 5 * real_m * get_avg_price();
-    double r = uint64_max;
+    double r = 0.0;
     auto st = pst_acnts.find(owner.value);
     if (st != pst_acnts.end() && st->amount.quantity.amount != 0) {
         r = (double)get_real_asset(dmc_asset) / st->amount.quantity.amount;
-    } 
+    } else {
+        // max_current_rate
+        r = 5 * 12;
+    }
     return r;
 }
 
@@ -461,7 +458,6 @@ void token::liquidation(string memo)
             extended_asset pst_sub = extended_asset(std::min(liq_pst_asset_leftover.quantity.amount, account_it->balance.quantity.amount), pst_sym);
 
             sub_balance(owner, pst_sub);
-            SEND_INLINE_ACTION(*this, currliqrec, { _self, "active"_n }, { owner, pst_sub });
             liq_pst_asset_leftover.quantity.amount = std::max((liq_pst_asset_leftover - pst_sub).quantity.amount, 0ll);
         }
 
@@ -483,12 +479,8 @@ void token::liquidation(string memo)
             sst.modify(bit, get_self(), [&](auto& r) {
                 r.unmatched -= sub_pst;
                 r.updated_at = time_point_sec(now_time_t);
-                // for tracker
-                if(r.unmatched.quantity.amount == 0)
-                    r.price = 0;
             });
 
-            SEND_INLINE_ACTION(*this, billsnap, { _self, "active"_n }, { *bit });
             if (bit->unmatched.quantity.amount == 0)
                 bit = sst.erase(bit);
             else
@@ -514,14 +506,13 @@ void token::liquidation(string memo)
         sub_stats(pst);
         auto iter = maker_tbl.find(miner.value);
         extended_asset new_staked = iter->total_staked - dmc;
-        double new_rate = cal_current_rate(new_staked, miner, iter->get_real_m());
+        double new_rate = cal_current_rate(new_staked, miner);
         maker_tbl.modify(iter, get_self(), [&](auto& s) {
             s.total_staked = new_staked;
             s.current_rate = new_rate;
         });
         add_balance(system_account, dmc, dmc_account);
-        SEND_INLINE_ACTION(*this, makerecord, {_self, "active"_n}, {*iter});
-        SEND_INLINE_ACTION(*this, liqrec, { _self, "active"_n }, { miner, pst, dmc });
+        SEND_INLINE_ACTION(*this, makerliqrec, { _self, "active"_n }, { miner, pst, dmc });
     }
 }
 
@@ -558,23 +549,18 @@ uint64_t token::calbonus(name owner, uint64_t bill_id, name ram_payer)
         uint64_t duration = now_time_t - updated_at_t;
         check(duration <= now_time_t, "subtractive overflow"); // never happened
 
-        extended_asset quantity = get_asset_by_amount<double, std::floor>(
-            incentive_rate * duration * ust->unmatched.quantity.amount * get_dmc_config("bmrate"_n, default_benchmark_stake_rate) / 100.0 / default_bill_dmc_claims_interval,
-            rsi_sym);
-
-        if (quantity.quantity.amount > 0) {
+        extended_asset quantity = get_asset_by_amount<double, std::floor>(incentive_rate * get_dmc_config("bmrate"_n, default_benchmark_stake_rate) / 100.0 / default_bill_dmc_claims_interval, rsi_sym);
+        quantity.quantity.amount *= duration;
+        quantity.quantity.amount *= ust->unmatched.quantity.amount;
+        if (quantity.quantity.amount != 0) {
             extended_asset dmc_quantity = get_dmc_by_vrsi(quantity);
 
             if (dmc_quantity.quantity.amount > 0) {
                 maker_tbl.modify(iter, ram_payer, [&](auto& s) {
                     s.total_staked += dmc_quantity;
-                    s.current_rate = cal_current_rate(s.total_staked, owner, s.get_real_m());
                 });
                 SEND_INLINE_ACTION(*this, incentiverec, {_self, "active"_n}, {owner, dmc_quantity, bill_id});
             }
-        } else {
-            // if quantity is 0, don't update updated_at
-            now_time_t = updated_at_t;
         }
     }
     return now_time_t;
@@ -645,23 +631,6 @@ uint64_t token::get_dmc_config(name key, uint64_t default_value)
     if (dmc_global_iter != dmc_global_tbl.end())
         return dmc_global_iter->value;
     return default_value;
-}
-
-void token::set_dmc_config(name key, uint64_t value)
-{
-    dmc_global dmc_global_tbl(get_self(), get_self().value);
-    auto config_itr = dmc_global_tbl.find(key.value);
-
-    if (config_itr == dmc_global_tbl.end()) {
-        dmc_global_tbl.emplace(_self, [&](auto& conf) {
-            conf.key = key;
-            conf.value = value;
-        });
-    } else {
-        dmc_global_tbl.modify(config_itr, get_self(), [&](auto& conf) {
-            conf.value = value;
-        });
-    }
 }
 
 double token::get_avg_price() {
@@ -754,7 +723,7 @@ void token::allocation(string memo)
             break;
         } else {
             auto duration_time = now_time.sec_since_epoch() - it->last_foundation_released_at.sec_since_epoch();
-        
+
             if (duration_time / 86400 == 0) // 24 * 60 * 60
                 break;
             auto remaining_time = it->end_at.sec_since_epoch() - it->last_foundation_released_at.sec_since_epoch();
