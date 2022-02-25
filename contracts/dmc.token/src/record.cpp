@@ -53,12 +53,17 @@ void token::nftaccrec(uint64_t family_id, uint64_t nft_id, name owner, extended_
     require_auth(_self);
 }
 
-void token::makerliqrec(name miner, extended_asset pst_asset, extended_asset dmc_asset)
+void token::liqrec(name miner, extended_asset pst_asset, extended_asset dmc_asset)
 {
     require_auth(_self);
 }
 
 void token::billliqrec(name miner, uint64_t bill_id, extended_asset sub_pst)
+{
+    require_auth(_self);
+}
+
+void token::currliqrec(name miner, extended_asset sub_pst)
 {
     require_auth(_self);
 }

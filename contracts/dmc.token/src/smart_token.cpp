@@ -120,7 +120,7 @@ void token::exretire(name from, extended_asset quantity, string memo)
         auto iter = maker_tbl.find(from.value);
         if (iter != maker_tbl.end()) {
             maker_tbl.modify(iter, get_self(), [&](auto& m) {
-                m.current_rate = cal_current_rate(iter->total_staked, from);
+                m.current_rate = cal_current_rate(iter->total_staked, from, iter->get_real_m());
             });
         }
     }

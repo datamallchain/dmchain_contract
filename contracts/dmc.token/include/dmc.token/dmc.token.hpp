@@ -299,8 +299,13 @@ public:
 public:
     ACTION incentiverec(name owner, extended_asset inc, uint64_t bill_id);
     ACTION redeemrec(name owner, name miner, extended_asset asset);
-    ACTION makerliqrec(name miner, extended_asset pst_asset, extended_asset dmc_asset);
+
+    ACTION liqrec(name miner, extended_asset pst_asset, extended_asset dmc_asset);
+
     ACTION billliqrec(name miner, uint64_t bill_id, extended_asset sub_pst);
+
+    ACTION currliqrec(name miner, extended_asset sub_pst);
+
 public:
     ACTION nftsymrec(uint64_t symbol_id, extended_symbol nft_symbol, std::string symbol_uri, nft_type type);
     ACTION nftrec(uint64_t symbol_id, uint64_t nft_id, std::string nft_uri, std::string nft_name, std::string extra_data, extended_asset quantity);
@@ -419,7 +424,7 @@ public:
         lock_accounts;
 
     TABLE currency_stats {
-        asset supply;
+        asset supply; 
         asset max_supply;
         name issuer;
         asset reserve_supply;
@@ -638,14 +643,12 @@ public:
         // n' = n' * 0.6
         uint64_t benchmark_stake_rate;
         time_point_sec rate_updated_at;
-        // if pst is ordered, the DMC which mint to PST will be locked, PST retired.
-        // DMC = PST * price * n' (n' = m' * 0.6)
-        extended_asset locked_staked;
 
         uint64_t primary_key() const { return miner.value; }
         uint64_t by_m() const { return benchmark_stake_rate; }
         uint64_t get_n() const { return benchmark_stake_rate * 0.6; }
-        double by_rate() const { return current_rate - get_n() / 100.0; }
+        double get_real_m() const { return benchmark_stake_rate / 100.0; }
+        double by_rate() const { return current_rate / get_n(); }
     };
     typedef eosio::multi_index<"dmcmaker"_n, dmc_maker,
         indexed_by<"byrate"_n, const_mem_fun<dmc_maker, double, &dmc_maker::by_rate>>,
@@ -732,7 +735,7 @@ private:
 
 private:
     uint64_t calbonus(name owner, uint64_t primary, name ram_payer);
-    double cal_current_rate(extended_asset dmc_asset, name owner);
+    double cal_current_rate(extended_asset dmc_asset, name owner, double real_m);
 
 private:
     void generate_maker_snapshot(uint64_t order_id, uint64_t bill_id, name miner, name payer, bool reset = false);

@@ -164,7 +164,7 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
     sub_stats(asset);
     change_pst(miner, -asset);
     maker_tbl.modify(maker_iter, owner, [&](auto& m) {
-        m.current_rate = cal_current_rate(m.total_staked - miner_lock_dmc, miner);
+        m.current_rate = cal_current_rate(m.total_staked - miner_lock_dmc, miner, m.get_real_m());
         m.total_staked -= miner_lock_dmc;
     });
 
@@ -187,15 +187,16 @@ void token::increase(name owner, extended_asset asset, name miner)
     auto iter = maker_tbl.find(miner.value);
     dmc_maker_pool dmc_pool(get_self(), miner.value);
     auto p_iter = dmc_pool.find(owner.value);
+    uint64_t benchmark_stake_rate = get_dmc_config("bmrate"_n, default_benchmark_stake_rate);
     if (iter == maker_tbl.end()) {
         if (owner == miner) {
             iter = maker_tbl.emplace(miner, [&](auto& m) {
                 m.miner = owner;
-                m.current_rate = cal_current_rate(asset, miner);
+                m.current_rate = cal_current_rate(asset, miner, benchmark_stake_rate / 100.0);
                 m.miner_rate = 1;
                 m.total_weight = static_weights;
                 m.total_staked = asset;
-                m.benchmark_stake_rate = get_dmc_config("bmrate"_n, default_benchmark_stake_rate);
+                m.benchmark_stake_rate = benchmark_stake_rate;
             });
 
             p_iter = dmc_pool.emplace(owner, [&](auto& p) {
@@ -208,7 +209,7 @@ void token::increase(name owner, extended_asset asset, name miner)
     } else if (iter->total_staked.quantity.amount == 0) {
         check(owner == miner, "only miner can stake now");
         maker_tbl.modify(iter, owner, [&](auto& m) {
-            m.current_rate = cal_current_rate(asset, miner);
+            m.current_rate = cal_current_rate(asset, miner, m.get_real_m());
             m.total_weight = static_weights;
             m.total_staked = asset;
         });
@@ -222,7 +223,7 @@ void token::increase(name owner, extended_asset asset, name miner)
         check(new_weight > 0, "invalid new weight");
         // check(new_weight / total_weight > 0.0001, "the quantity of increase is insufficient.");
 
-        double r = cal_current_rate(new_total, miner);
+        double r = cal_current_rate(new_total, miner, iter->get_real_m());
         maker_tbl.modify(iter, owner, [&](auto& m) {
             m.total_weight = total_weight;
             m.total_staked = new_total;
@@ -291,15 +292,14 @@ void token::redemption(name owner, double rate, name miner)
     double total_weight = iter->total_weight - owner_weight;
     extended_asset total_staked = iter->total_staked - rede_quantity;
     double benchmark_stake_rate = get_dmc_rate(iter->benchmark_stake_rate);
-    double r = cal_current_rate(total_staked, miner);
+    double r = cal_current_rate(total_staked, miner, iter->get_real_m());
 
     if (miner == owner) {
         check(r >= benchmark_stake_rate, "current stake rate less than benchmark stake rate, redemption fails");
 
         double miner_rate = 0.0;
         if (total_staked.quantity.amount == 0) {
-            // max_current_rate
-            miner_rate = benchmark_stake_rate * 5;
+            miner_rate = uint64_max;
         } else {
             auto miner_iter = dmc_pool.find(miner.value);
             check(miner_iter != dmc_pool.end(), "miner can only redeem all last");
@@ -356,7 +356,7 @@ void token::mint(name owner, extended_asset asset)
     add_stats(asset);
     add_balance(owner, asset, owner);
     change_pst(owner, asset);
-    double r = cal_current_rate(iter.total_staked, owner);
+    double r = cal_current_rate(iter.total_staked, owner, iter.get_real_m());
     check(r >= benchmark_stake_rate, "current stake rate less than benchmark stake rate, mint fails");
 
     maker_tbl.modify(iter, get_self(), [&](auto& m) {
@@ -415,17 +415,14 @@ void token::setmakerbstr(name owner, uint64_t self_benchmark_stake_rate)
     SEND_INLINE_ACTION(*this, makerecord, {_self, "active"_n}, {iter});
 }
 
-double token::cal_current_rate(extended_asset dmc_asset, name owner)
+double token::cal_current_rate(extended_asset dmc_asset, name owner, double real_m)
 {
     pststats pst_acnts(get_self(), get_self().value);
-    double r = 0.0;
+    double r = 5 * real_m * get_avg_price();
     auto st = pst_acnts.find(owner.value);
     if (st != pst_acnts.end() && st->amount.quantity.amount != 0) {
-        r = (double)get_real_asset(dmc_asset) / st->amount.quantity.amount;
-    } else {
-        // max_current_rate
-        r = 5 * 12;
-    }
+        r = std::min((double)get_real_asset(dmc_asset) / st->amount.quantity.amount, r);
+    } 
     return r;
 }
 
@@ -458,6 +455,7 @@ void token::liquidation(string memo)
             extended_asset pst_sub = extended_asset(std::min(liq_pst_asset_leftover.quantity.amount, account_it->balance.quantity.amount), pst_sym);
 
             sub_balance(owner, pst_sub);
+            SEND_INLINE_ACTION(*this, currliqrec, { _self, "active"_n }, { owner, pst_sub });
             liq_pst_asset_leftover.quantity.amount = std::max((liq_pst_asset_leftover - pst_sub).quantity.amount, 0ll);
         }
 
@@ -479,8 +477,12 @@ void token::liquidation(string memo)
             sst.modify(bit, get_self(), [&](auto& r) {
                 r.unmatched -= sub_pst;
                 r.updated_at = time_point_sec(now_time_t);
+                // for tracker
+                if(r.unmatched.quantity.amount == 0)
+                    r.price = 0;
             });
 
+            SEND_INLINE_ACTION(*this, billsnap, { _self, "active"_n }, { *bit });
             if (bit->unmatched.quantity.amount == 0)
                 bit = sst.erase(bit);
             else
@@ -506,13 +508,14 @@ void token::liquidation(string memo)
         sub_stats(pst);
         auto iter = maker_tbl.find(miner.value);
         extended_asset new_staked = iter->total_staked - dmc;
-        double new_rate = cal_current_rate(new_staked, miner);
+        double new_rate = cal_current_rate(new_staked, miner, iter->get_real_m());
         maker_tbl.modify(iter, get_self(), [&](auto& s) {
             s.total_staked = new_staked;
             s.current_rate = new_rate;
         });
         add_balance(system_account, dmc, dmc_account);
-        SEND_INLINE_ACTION(*this, makerliqrec, { _self, "active"_n }, { miner, pst, dmc });
+        SEND_INLINE_ACTION(*this, makerecord, {_self, "active"_n}, {*iter});
+        SEND_INLINE_ACTION(*this, liqrec, { _self, "active"_n }, { miner, pst, dmc });
     }
 }
 
@@ -558,6 +561,7 @@ uint64_t token::calbonus(name owner, uint64_t bill_id, name ram_payer)
             if (dmc_quantity.quantity.amount > 0) {
                 maker_tbl.modify(iter, ram_payer, [&](auto& s) {
                     s.total_staked += dmc_quantity;
+                    s.current_rate = cal_current_rate(s.total_staked, owner, s.get_real_m());
                 });
                 SEND_INLINE_ACTION(*this, incentiverec, {_self, "active"_n}, {owner, dmc_quantity, bill_id});
             }

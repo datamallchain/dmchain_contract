@@ -212,7 +212,7 @@ extended_asset token::distribute_lp_pool(uint64_t order_id, extended_asset pledg
 
     extended_asset new_total = maker_iter->total_staked + (pledge - sub_pledge);
     double weight_change = (double)(pledge - sub_pledge).quantity.amount / maker_iter->total_staked.quantity.amount * maker_iter->total_weight;
-    double r = cal_current_rate(new_total, miner);
+    double r = cal_current_rate(new_total, miner, maker_iter->get_real_m());
     maker_tbl.modify(maker_iter, get_self(), [&](auto& m) {
         m.total_weight = m.total_weight + weight_change;
         m.total_staked = new_total;
