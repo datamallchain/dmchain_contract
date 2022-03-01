@@ -93,8 +93,12 @@ void token::makerpoolrec(name miner, std::vector<maker_pool> pool_info)
      require_auth(_self);
 }
 
-void token::assetrec(uint64_t order_id, std::vector<extended_asset> changed, name owner, AccountType acc_type, OrderReceiptType rec_type) {
+void token::assetrec(uint64_t order_id, std::vector<extended_asset> changed, name owner, AssetReceiptType rec_type) {
     require_auth(_self);
+}
+
+void token::orderassrec(uint64_t order_id, std::vector<extended_asset> changed, name owner, AccountType acc_type, OrderReceiptType rec_type, time_point_sec exec_date){
+
 }
 
 void token::makersnaprec(maker_snapshot maker_snapshot) {

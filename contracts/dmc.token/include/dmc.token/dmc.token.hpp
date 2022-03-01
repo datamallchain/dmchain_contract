@@ -109,21 +109,30 @@ enum e_account_type {
 typedef uint8_t AccountType;
 
 enum e_order_receipt_type {
-    OrderReceiptUpdate = 1,
-    OrderReceiptClaim = 2,
-    OrderReceiptUser = 3,
+    OrderReceiptAddReserve = 1,
+    OrderReceiptSubReserve = 2,
+    OrderReceiptRenew = 3,
     OrderReceiptChallengeReq = 4,
     OrderReceiptChallengeAns = 5,
     OrderReceiptChallengeArb = 6,
-    OrderReceiptChallengePayRet = 7,
-    OrderReceiptChallengePayReward = 8,
+    OrderReceiptPayChallengeRet = 7,
+    OrderReceiptDeposit = 8,
     OrderReceiptLockRet = 9,
-    OrderReceiptCancel = 10,
-    OrderReceiptOrder = 11,
-    OrderReceiptDeposit = 12,
-    OrderReceiptMinerLock = 13,
-    OrderReceiptEnd = 14,
+    OrderReceiptReward = 10,
+    OrderReceiptEnd = 11,
 };
+
+enum e_asset_receipt_type {
+    AssetReceiptAddReserve = 1,
+    AssetReceiptSubReserve = 2,
+    AssetReceiptDeposit = 3,
+    AssetReceiptPayChallenge = 4,
+    AssetReceiptClaim = 5,
+    AssetReceiptCancel = 6,
+    AssetReceiptMinerLock = 7,
+    AssetReceiptEnd = 8,
+};
+
 
 enum e_maker_receipt_type {
     MakerReceiptClaim = 1,
@@ -131,6 +140,7 @@ enum e_maker_receipt_type {
     MakerReceiptIncrease = 3,
     MakerReceiptRedemption = 4,
     MakerReceiptLiquidation = 5,
+    MakerReceiptLock = 6,
 };
 
 enum e_maker_distribute_type {
@@ -143,6 +153,7 @@ typedef uint8_t ChallengeState;
 
 typedef uint8_t nft_type;
 typedef uint8_t OrderReceiptType;
+typedef uint8_t AssetReceiptType;
 typedef uint8_t MakerReceiptType;
 typedef uint8_t MakerDistributeType;
 
@@ -279,7 +290,7 @@ private:
     extended_asset get_asset_by_amount(T amount, extended_symbol symbol);
 
     void uniswapdeal(name owner, extended_asset& market_from, extended_asset& market_to, extended_asset from, extended_asset to_sym, uint64_t primary, double price, name rampay);
-
+    
     extended_asset exchange_from_uniswap(extended_asset add_balance);
 
     extended_asset get_dmc_by_vrsi(extended_asset rsi_quantity);
@@ -424,7 +435,7 @@ public:
         lock_accounts;
 
     TABLE currency_stats {
-        asset supply; 
+        asset supply;
         asset max_supply;
         name issuer;
         asset reserve_supply;
@@ -640,7 +651,7 @@ public:
         double total_weight;
         extended_asset total_staked;
         // m' = benchmark_stake_rate / 100.0
-        // n' = n' * 0.6
+        // n' = m' * 0.6
         uint64_t benchmark_stake_rate;
         time_point_sec rate_updated_at;
 
@@ -716,7 +727,8 @@ public:
     ACTION makerpoolrec(name miner, std::vector<maker_pool> pool_info);
     ACTION makersnaprec(maker_snapshot maker_snapshot);
     ACTION dismakerec(uint64_t order_id, extended_asset total, std::vector<distribute_maker_snapshot> distribute_info);
-    ACTION assetrec(uint64_t order_id, std::vector<extended_asset> changed, name owner, AccountType acc_type, OrderReceiptType rec_type);
+    ACTION assetrec(uint64_t order_id, std::vector<extended_asset> changed, name owner, AssetReceiptType rec_type);
+    ACTION orderassrec(uint64_t order_id, std::vector<extended_asset> changed, name owner, AccountType acc_type, OrderReceiptType rec_type, time_point_sec exec_date);
 
 private:
     inline static name get_foundation(name issuer)
@@ -742,7 +754,7 @@ private:
     void update_order_asset(dmc_order& order, OrderState new_state, uint64_t claims_interval);
     void change_order(dmc_order& order, const dmc_challenge& challenge, time_point_sec current, uint64_t claims_interval, name payer);
     void update_order(dmc_order& order, const dmc_challenge& challenge, name payer);
-    extended_asset distribute_lp_pool(uint64_t order_id, extended_asset pledge, extended_asset challenge_pledge, name payer,  OrderReceiptType rec_type);
+    extended_asset distribute_lp_pool(uint64_t order_id, extended_asset pledge, extended_asset challenge_pledge, name payer,  AssetReceiptType rec_type);
     void phishing_challenge();
 };
 

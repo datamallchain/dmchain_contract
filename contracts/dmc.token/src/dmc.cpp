@@ -117,6 +117,10 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
     check(maker_iter != maker_tbl.end(), "can't find maker pool");
     
     double r = std::floor(maker_iter->current_rate * 100 / get_avg_price()) / 100.0;
+    // r = 5m' if r > 5m'
+    if (r > maker_iter->benchmark_stake_rate * 5) {
+        r = maker_iter->benchmark_stake_rate * 5;
+    }
     auto miner_lock_dmc = extended_asset(user_to_pay.quantity.amount * r, user_to_pay.get_extended_symbol());
     check(maker_iter->total_staked >= miner_lock_dmc, "not enough stake quantity");
     dmc_order order_info = {
@@ -158,8 +162,6 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
     challenge_tbl.emplace(owner, [&](auto& c) {
         c = challenge_info;
     });
-
-    SEND_INLINE_ACTION(*this, assetrec, { _self, "active"_n }, { order_id, { reserve }, order_info.user,  ACC_TYPE_USER, OrderReceiptOrder});
     
     sub_stats(asset);
     change_pst(miner, -asset);
@@ -173,6 +175,9 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
     SEND_INLINE_ACTION(*this, orderrec, { _self, "active"_n }, { order_info });
     SEND_INLINE_ACTION(*this, challengerec, { _self, "active"_n }, { challenge_info });
     SEND_INLINE_ACTION(*this, billsnap, { _self, "active"_n }, { *ust });
+    SEND_INLINE_ACTION(*this, assetrec, { _self, "active"_n }, { order_info.order_id, { reserve }, order_info.user, AssetReceiptAddReserve});
+    SEND_INLINE_ACTION(*this, orderassrec, { _self, "active"_n }, { order_info.order_id, { -user_to_deposit }, order_info.user,  ACC_TYPE_USER, OrderReceiptDeposit, time_point_sec(current_time_point())});
+    SEND_INLINE_ACTION(*this, orderassrec, { _self, "active"_n }, { order_info.order_id, { -user_to_pay }, order_info.user,  ACC_TYPE_USER, OrderReceiptRenew, time_point_sec(current_time_point())});
 }
 
 void token::increase(name owner, extended_asset asset, name miner)
@@ -418,10 +423,11 @@ void token::setmakerbstr(name owner, uint64_t self_benchmark_stake_rate)
 double token::cal_current_rate(extended_asset dmc_asset, name owner, double real_m)
 {
     pststats pst_acnts(get_self(), get_self().value);
-    double r = 5 * real_m * get_avg_price();
+    // double r = 5 * real_m * get_avg_price();
+    double r = uint64_max;
     auto st = pst_acnts.find(owner.value);
     if (st != pst_acnts.end() && st->amount.quantity.amount != 0) {
-        r = std::min((double)get_real_asset(dmc_asset) / st->amount.quantity.amount, r);
+        r = (double)get_real_asset(dmc_asset) / st->amount.quantity.amount;
     } 
     return r;
 }
