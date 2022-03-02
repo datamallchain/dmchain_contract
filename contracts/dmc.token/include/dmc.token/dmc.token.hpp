@@ -28,7 +28,7 @@ static const name system_account = "datamall"_n;
 static const name empty_account = name { 0 };
 static constexpr symbol fee_sym = symbol(symbol_code("FEE"), 4);
 static const extended_symbol pst_sym = extended_symbol(symbol(symbol_code("PST"), 0), system_account);
-static const extended_symbol rsi_sym = extended_symbol(symbol(symbol_code("RSI"), 8), system_account);
+static const extended_symbol rsi_sym = extended_symbol(symbol(symbol_code("RSI"), 4), system_account);
 static const extended_symbol dmc_sym = extended_symbol(symbol(symbol_code("DMC"), 4), system_account);
 constexpr uint64_t day_sec = 24 * 3600;
 constexpr uint64_t week_sec = 7 * day_sec;
@@ -38,6 +38,7 @@ constexpr uint32_t identifying_code_mask = 0x3FFFFFF;
 constexpr uint64_t default_dmc_challenge_interval = day_sec;
 constexpr uint64_t default_phishing_interval = day_sec;
 constexpr uint64_t default_initial_price = 10;
+constexpr uint64_t default_id_start = 1;
 /**
  * the longest service time for bill / order
  * 24 weeks
@@ -290,7 +291,7 @@ private:
     extended_asset get_asset_by_amount(T amount, extended_symbol symbol);
 
     void uniswapdeal(name owner, extended_asset& market_from, extended_asset& market_to, extended_asset from, extended_asset to_sym, uint64_t primary, double price, name rampay);
-    
+
     extended_asset exchange_from_uniswap(extended_asset add_balance);
 
     extended_asset get_dmc_by_vrsi(extended_asset rsi_quantity);
@@ -345,6 +346,7 @@ private:
 
 private:
     uint64_t get_dmc_config(name key, uint64_t default_value);
+    void set_dmc_config(name key, uint64_t value);
     double get_dmc_rate(uint64_t rate_value);
     double get_avg_price();
 
@@ -555,14 +557,6 @@ public:
     };
     typedef eosio::multi_index<"penaltystats"_n, penalty_stats> penaltystats;
 
-    struct stake_id_args {
-        name owner;
-        extended_asset quantity;
-        uint64_t price;
-        time_point_sec now;
-        string memo;
-    };
-
     struct order_id_args {
         name owner;
         name miner;
@@ -707,7 +701,7 @@ public:
         uint64_t order_id;
         name miner;
         uint64_t bill_id;
-        double rate;
+        uint64_t rate;
         std::vector<maker_lp_pool> lps;
         uint64_t primary_key() const { return order_id; }
     };
@@ -750,7 +744,7 @@ private:
     double cal_current_rate(extended_asset dmc_asset, name owner, double real_m);
 
 private:
-    void generate_maker_snapshot(uint64_t order_id, uint64_t bill_id, name miner, name payer, bool reset = false);
+    void generate_maker_snapshot(uint64_t order_id, uint64_t bill_id, name miner, name payer, uint64_t r, bool reset = false);
     void update_order_asset(dmc_order& order, OrderState new_state, uint64_t claims_interval);
     void change_order(dmc_order& order, const dmc_challenge& challenge, time_point_sec current, uint64_t claims_interval, name payer);
     void update_order(dmc_order& order, const dmc_challenge& challenge, name payer);

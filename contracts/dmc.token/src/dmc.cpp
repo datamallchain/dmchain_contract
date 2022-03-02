@@ -23,10 +23,8 @@ void token::bill(name owner, extended_asset asset, double price, time_point_sec 
     uint64_t price_t = price * std::pow(2, 32);
     sub_balance(owner, asset);
     bill_stats sst(get_self(), owner.value);
-
-    auto hash = sha256<stake_id_args>({ owner, asset, price_t, time_point_sec(current_time_point()), memo });
-    uint64_t bill_id = uint64_t(*reinterpret_cast<const uint64_t*>(&hash));
-
+    
+    uint64_t bill_id = get_dmc_config("billid"_n, default_id_start);
     bill_record bill_info = {
         .bill_id = bill_id,
         .owner = owner,
@@ -38,7 +36,8 @@ void token::bill(name owner, extended_asset asset, double price, time_point_sec 
         .expire_on = expire_on,
         .deposit_ratio = deposit_ratio
     };
-    
+
+    set_dmc_config("billid"_n, bill_id + 1);
     sst.emplace(owner, [&](auto &r) { 
         r = bill_info; 
     });
@@ -104,24 +103,19 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
     });
 
     uint64_t claims_interval = get_dmc_config("claiminter"_n, default_dmc_claims_interval);
-
-    dmc_orders order_tbl(get_self(), get_self().value);
-    auto hash = sha256<order_id_args>({ owner, miner, bill_id, asset, reserve, memo, time_point_sec(current_time_point()) });
-    uint64_t order_id = uint64_t(*reinterpret_cast<const uint64_t*>(&hash));
-    while (order_tbl.find(order_id) != order_tbl.end()) {
-        order_id += 1;
-    }
+    uint64_t order_id = get_dmc_config("orderid"_n, default_id_start);
     
     dmc_makers maker_tbl(get_self(), get_self().value);
     auto maker_iter = maker_tbl.find(miner.value);
     check(maker_iter != maker_tbl.end(), "can't find maker pool");
-    
-    double r = std::floor(maker_iter->current_rate * 100 / get_avg_price()) / 100.0;
+
+    dmc_orders order_tbl(get_self(), get_self().value);
+    uint64_t r = std::floor(maker_iter->current_rate * 100.0/ get_avg_price());
     // r = 5m' if r > 5m'
     if (r > maker_iter->benchmark_stake_rate * 5) {
         r = maker_iter->benchmark_stake_rate * 5;
     }
-    auto miner_lock_dmc = extended_asset(user_to_pay.quantity.amount * r, user_to_pay.get_extended_symbol());
+    auto miner_lock_dmc = extended_asset(user_to_pay.quantity.amount * (r / 100.0), user_to_pay.get_extended_symbol());
     check(maker_iter->total_staked >= miner_lock_dmc, "not enough stake quantity");
     dmc_order order_info = {
         .order_id = order_id,
@@ -142,7 +136,7 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
         .user_rsi = extended_asset(0, rsi_sym),
         .deposit = user_to_deposit,
         .deposit_valid = deposit_valid,
-        .cancel_date =  time_point_sec()
+        .cancel_date =  time_point_sec(),
     };
     order_tbl.emplace(owner, [&](auto& o) {
         o = order_info;
@@ -170,12 +164,14 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
         m.total_staked -= miner_lock_dmc;
     });
 
-    generate_maker_snapshot(order_info.order_id, bill_id, order_info.miner, owner, maker_iter->total_staked.quantity.amount == 0);
+    generate_maker_snapshot(order_info.order_id, bill_id, order_info.miner, owner, r, maker_iter->total_staked.quantity.amount == 0);
     trace_price_history(price, bill_id);
+    set_dmc_config("orderid"_n, order_id + 1);
     SEND_INLINE_ACTION(*this, orderrec, { _self, "active"_n }, { order_info });
     SEND_INLINE_ACTION(*this, challengerec, { _self, "active"_n }, { challenge_info });
     SEND_INLINE_ACTION(*this, billsnap, { _self, "active"_n }, { *ust });
     SEND_INLINE_ACTION(*this, assetrec, { _self, "active"_n }, { order_info.order_id, { reserve }, order_info.user, AssetReceiptAddReserve});
+    SEND_INLINE_ACTION(*this, orderassrec, { _self, "active"_n }, { order_info.order_id, { reserve }, order_info.user,  ACC_TYPE_USER, OrderReceiptAddReserve, time_point_sec(current_time_point())});
     SEND_INLINE_ACTION(*this, orderassrec, { _self, "active"_n }, { order_info.order_id, { -user_to_deposit }, order_info.user,  ACC_TYPE_USER, OrderReceiptDeposit, time_point_sec(current_time_point())});
     SEND_INLINE_ACTION(*this, orderassrec, { _self, "active"_n }, { order_info.order_id, { -user_to_pay }, order_info.user,  ACC_TYPE_USER, OrderReceiptRenew, time_point_sec(current_time_point())});
 }
@@ -641,6 +637,23 @@ uint64_t token::get_dmc_config(name key, uint64_t default_value)
     if (dmc_global_iter != dmc_global_tbl.end())
         return dmc_global_iter->value;
     return default_value;
+}
+
+void token::set_dmc_config(name key, uint64_t value)
+{
+    dmc_global dmc_global_tbl(get_self(), get_self().value);
+    auto config_itr = dmc_global_tbl.find(key.value);
+
+    if (config_itr == dmc_global_tbl.end()) {
+        dmc_global_tbl.emplace(_self, [&](auto& conf) {
+            conf.key = key;
+            conf.value = value;
+        });
+    } else {
+        dmc_global_tbl.modify(config_itr, get_self(), [&](auto& conf) {
+            conf.value = value;
+        });
+    }
 }
 
 double token::get_avg_price() {

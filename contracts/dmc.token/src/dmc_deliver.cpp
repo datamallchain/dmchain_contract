@@ -136,11 +136,10 @@ void token::update_order(dmc_order& order, const dmc_challenge& challenge, name 
     }
 }
 
-void token::generate_maker_snapshot(uint64_t order_id, uint64_t bill_id, name miner, name payer, bool reset) {
+void token::generate_maker_snapshot(uint64_t order_id, uint64_t bill_id, name miner, name payer, uint64_t r, bool reset) {
     dmc_makers maker_tbl(get_self(), get_self().value);
     auto maker_iter = maker_tbl.find(miner.value);
     check(maker_iter != maker_tbl.end(), "can't find maker pool");
-    double r = std::floor(maker_iter->current_rate * 100 / get_avg_price());
 
     dmc_maker_pool dmc_pool(get_self(), miner.value);
     std::vector<maker_lp_pool> lps;
@@ -192,7 +191,10 @@ extended_asset token::distribute_lp_pool(uint64_t order_id, extended_asset pledg
         auto miner_dmc_pledge = extended_asset(round(pledge.quantity.amount / (current_r + 1.0)), pledge.get_extended_symbol());
         auto remain_pay = miner_dmc_pledge.quantity > challenge_pledge.quantity ? extended_asset(0, challenge_pledge.get_extended_symbol()) : challenge_pledge - miner_dmc_pledge;
         miner_dmc_pledge = miner_dmc_pledge.quantity > challenge_pledge.quantity ? miner_dmc_pledge - challenge_pledge : extended_asset(0, miner_dmc_pledge.get_extended_symbol());
-        increase_penalty(challenge_pledge - remain_pay);
+        if ((challenge_pledge - remain_pay).quantity.amount > 0) {
+            SEND_INLINE_ACTION(*this, orderassrec, { _self, "active"_n }, { order_id, { remain_pay -  challenge_pledge}, miner,  ACC_TYPE_MINER, OrderReceiptChallengeAns, time_point_sec(current_time_point())});
+            increase_penalty(challenge_pledge - remain_pay);
+        }
         if (miner_dmc_pledge.quantity.amount) {
             add_balance(miner, miner_dmc_pledge, payer);
             SEND_INLINE_ACTION(*this, assetrec, { _self, "active"_n }, { order_id, { miner_dmc_pledge }, miner, rec_type});
