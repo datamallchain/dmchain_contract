@@ -18,9 +18,16 @@ void token::addreserves(account_name owner, extended_asset x, extended_asset y)
     auto sym_x = x.get_extended_symbol();
     auto sym_y = y.get_extended_symbol();
 
-    sub_balance(owner, x);
-    sub_balance(owner, y);
+    if (sym_x == rsi_sym && sym_y == dmc_sym)
+        eosio_assert(owner == system_account, "this market only support datamall to addreserves");
 
+    if (owner == system_account) {
+        add_stats(owner, x);
+        add_stats(owner, y);
+    } else {
+        sub_balance(owner, x);
+        sub_balance(owner, y);
+    }
     swap_market market(_self, _self);
     auto m_index = market.get_index<N(bysymbol)>();
     auto m_iter = m_index.find(uniswap_market::key(sym_x, sym_y));
@@ -148,8 +155,13 @@ void token::outreserves(account_name owner, extended_symbol x, extended_symbol y
         eosio_assert(pool_iter->weights / m_iter->total_weights > 0.0001, "The remaining weight is too low");
 
     SEND_INLINE_ACTION(*this, outreceipt, { _self, N(active) }, { owner, x_quantity, y_quantity });
-    add_balance(owner, x_quantity, owner);
-    add_balance(owner, y_quantity, owner);
+    if (owner == system_account) {
+        sub_stats(owner, x_quantity);
+        sub_stats(owner, y_quantity);
+    } else {
+        add_balance(owner, x_quantity, owner);
+        add_balance(owner, y_quantity, owner);
+    }
 }
 
 void token::uniswaporder(account_name owner, extended_asset quantity, extended_asset to, double price, account_name id, account_name rampay)

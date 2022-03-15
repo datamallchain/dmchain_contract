@@ -46,23 +46,16 @@ void token::exissue(account_name to, extended_asset quantity, string memo)
 
     eosio_assert(memo.size() <= 256, "memo has more than 256 bytes");
 
-    stats statstable(_self, issuer);
-    const auto& st = statstable.get(quantity.symbol.name(), "token with symbol does not exist, create token before issue");
-
-    eosio_assert(quantity.is_valid(), "issue invalid currency");
-    eosio_assert(quantity.amount > 0, "must issue positive amount");
-    eosio_assert(quantity.symbol == st.supply.symbol, "symbol precision mismatch");
-
-    eosio_assert(quantity.amount <= st.max_supply.amount - st.supply.amount - st.reserve_supply.amount, "amount exceeds available supply when issue");
-    statstable.modify(st, 0, [&](auto& s) {
-        s.supply += quantity;
-    });
+    add_stats(issuer, quantity);
 
     add_balance(foundation, quantity, foundation);
 
     if (to != foundation) {
         SEND_INLINE_ACTION(*this, extransfer, { foundation, N(active) }, { foundation, to, quantity, memo });
     }
+
+    if (quantity.get_extended_symbol() == pst_sym)
+        check_pst(to, quantity);
 }
 
 void token::extransfer(account_name from, account_name to, extended_asset quantity, string memo)
@@ -108,13 +101,12 @@ void token::exretire(account_name from, extended_asset quantity, string memo)
 
     auto issuer = quantity.contract;
 
-    stats statstable(_self, issuer);
-    const auto& st = statstable.get(quantity.symbol.name(), "token with symbol does not exist");
-
     sub_balance(from, quantity);
-    statstable.modify(st, 0, [&](auto& s) {
-        s.supply -= quantity;
-    });
+
+    sub_stats(issuer, quantity);
+
+    if (quantity.get_extended_symbol() == pst_sym)
+        check_pst(from, -quantity);
 }
 
 void token::exclose(account_name owner, extended_symbol symbol)
@@ -141,9 +133,6 @@ void token::sub_balance(account_name owner, extended_asset value)
     from_iter.modify(from, owner, [&](auto& a) {
         a.balance -= value;
     });
-
-    if (value.get_extended_symbol() == pst_sym)
-        check_pst(owner, -value);
 }
 
 void token::add_balance(account_name owner, extended_asset value, account_name ram_payer)
@@ -166,9 +155,6 @@ void token::add_balance(account_name owner, extended_asset value, account_name r
             a.balance += value;
         });
     }
-
-    if (value.get_extended_symbol() == pst_sym)
-        check_pst(owner, value);
 }
 
 void token::check_pst(account_name owner, extended_asset value)
@@ -191,5 +177,30 @@ void token::check_pst(account_name owner, extended_asset value)
     action({ _self, N(active) }, N(eosio), N(settotalvote),
         std::make_tuple(owner, st->amount.amount))
         .send();
+}
+
+void token::add_stats(account_name issuer, extended_asset quantity)
+{
+    stats statstable(_self, issuer);
+    const auto& st = statstable.get(quantity.symbol.name(), "token with symbol does not exist, create token before issue");
+
+    eosio_assert(quantity.is_valid(), "issue invalid currency");
+    eosio_assert(quantity.amount > 0, "must issue positive amount");
+    eosio_assert(quantity.symbol == st.supply.symbol, "symbol precision mismatch");
+
+    eosio_assert(quantity.amount <= st.max_supply.amount - st.supply.amount - st.reserve_supply.amount, "amount exceeds available supply when issue");
+    statstable.modify(st, 0, [&](auto& s) {
+        s.supply += quantity;
+    });
+}
+
+void token::sub_stats(account_name issuer, extended_asset quantity)
+{
+    stats statstable(_self, issuer);
+    const auto& st = statstable.get(quantity.symbol.name(), "token with symbol does not exist");
+
+    statstable.modify(st, 0, [&](auto& s) {
+        s.supply -= quantity;
+    });
 }
 }

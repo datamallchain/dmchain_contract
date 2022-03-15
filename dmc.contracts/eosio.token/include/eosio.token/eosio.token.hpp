@@ -23,11 +23,32 @@ static const account_name system_account = N(datamall);
 static const extended_symbol pst_sym = extended_symbol(S(0, PST), system_account);
 static const extended_symbol rsi_sym = extended_symbol(S(8, RSI), system_account);
 static const extended_symbol dmc_sym = extended_symbol(S(4, DMC), system_account);
+constexpr uint64_t default_dmc_claims_interval = 7 * 24 * 3600;
+constexpr uint64_t default_dmc_stake_rate = 20;
+constexpr uint32_t identifying_code_mask = 0x3FFFFFF;
 // 0.00000041 rsi
 static const extended_asset per_sec_bonus = extended_asset(41, rsi_sym);
 
 // for abo
 static const account_name abo_account = N(dmfoundation);
+
+// 业务类型
+enum e_order_state {
+    OrderStateBegin = 0,
+    OrderStart = 1,
+    OrderSubmitMerkle = 2,
+    OrderConsistent = 3,
+    OrderInconsistent = 4,
+    OrderSubmitProof = 5,
+    OrderVerifyProof = 6,
+    OrderDenyProof = 7,
+    OrderMinerPay = 8,
+    OrderCancel = 9,
+    OrderEnd = 10,
+    OrderStateEnd,
+};
+
+typedef uint8_t OrderState;
 
 class token : public contract {
 
@@ -188,13 +209,13 @@ public:
      @param primary 取消的 id
      @param memo 备注
     */
-    void unstake(account_name owner, uint64_t primary, string memo);
+    void unstake(account_name owner, uint64_t stake_id, string memo);
 
     /*! @brief 领取激励
      @param owner 领取激励账户
      @param primary 领取的id
     */
-    void getincentive(account_name owner, uint64_t primary);
+    void getincentive(account_name owner, uint64_t stake_id);
 
     /*! @brief 设置 DMC 释放
      @param stage 释放阶段，目前1-11
@@ -210,6 +231,31 @@ public:
      @param memo 附言
      */
     void allocation(string memo);
+
+    /*! @brief 撮合挂单订单
+     @param owner 交易者
+     @param miner 挂单者
+     @param stake_id 挂单 id
+     @param asset 交易数量
+     @param memo 附言
+     */
+    void order(account_name owner, account_name miner, uint64_t stake_id, extended_asset asset, string memo);
+
+    void addmerkle(name sender, uint64_t order_id, checksum256 merkle_root);
+
+    void submitproof(name sender, uint64_t order_id, uint64_t data_id, checksum256 hash_data, std::string nonce);
+
+    void replyproof(name sender, uint64_t order_id, checksum256 reply_hash);
+
+    void challenge(name sender, uint64_t order_id, const std::vector<char>& data, std::vector<std::vector<checksum256>> cut_merkle);
+
+    void setdmcconfig(account_name key, uint64_t value);
+
+    void claimorder(name payer, uint64_t order_id);
+
+    void reneworder(name sender, uint64_t order_id);
+
+    void cancelorder(name sender, uint64_t order_id);
 
 private:
     void uniswaporder(account_name owner, extended_asset quantity, extended_asset to, double price, account_name id, account_name rampay);
@@ -234,6 +280,12 @@ public:
 
 private:
     void check_pst(account_name owner, extended_asset value);
+    void add_stats(account_name issuer, extended_asset quantity);
+    void sub_stats(account_name issuer, extended_asset quantity);
+    string uint32_to_string(uint32_t value);
+
+private:
+    uint64_t get_dmc_config(name key, uint64_t default_value);
 
 private:
     struct account {
@@ -319,6 +371,7 @@ private:
 
     struct stake_record {
         uint64_t primary;
+        uint64_t stake_id;
         account_name owner;
         extended_asset matched;
         extended_asset unmatched;
@@ -329,12 +382,15 @@ private:
         uint64_t primary_key() const { return primary; }
         uint64_t get_lower() const { return price; }
         uint64_t get_time() const { return uint64_t(updated_at.sec_since_epoch()); };
-        EOSLIB_SERIALIZE(stake_record, (primary)(owner)(matched)(unmatched)(price)(created_at)(updated_at))
+        uint64_t get_stake_id() const { return stake_id; }
+        EOSLIB_SERIALIZE(stake_record, (primary)(stake_id)(owner)(matched)(unmatched)(price)(created_at)(updated_at))
     };
     typedef eosio::multi_index<N(stakerec), stake_record,
         indexed_by<N(bylowerprice), const_mem_fun<stake_record, uint64_t, &stake_record::get_lower>>,
-        indexed_by<N(bytime), const_mem_fun<stake_record, uint64_t, &stake_record::get_time>>>
+        indexed_by<N(bytime), const_mem_fun<stake_record, uint64_t, &stake_record::get_time>>,
+        indexed_by<N(byid), const_mem_fun<stake_record, uint64_t, &stake_record::get_stake_id>>>
         stake_stats;
+
     struct pst_stats {
         account_name owner;
         extended_asset amount;
@@ -359,6 +415,61 @@ private:
     };
     typedef eosio::multi_index<N(abostats), abo_stats> abostats;
 
+    struct stake_id_args {
+        account_name owner;
+        extended_asset quantity;
+        uint64_t price;
+        time now;
+        string memo;
+    };
+
+    struct dmc_config {
+        account_name key;
+        uint64_t value;
+
+        uint64_t primary_key() const { return key; }
+
+        EOSLIB_SERIALIZE(dmc_config, (key)(value))
+    };
+    typedef eosio::multi_index<N(dmcconfig), dmc_config> dmc_global;
+
+    // dmc订单表
+    struct dmc_order {
+        uint64_t order_id; // 唯一性主键
+        account_name user; // 购买者
+        account_name miner; // 挂单者
+        uint64_t stake_id;
+        extended_asset user_pledge; // dmc
+        extended_asset miner_pledge; // pst
+        OrderState state;
+        time_point_sec create_date;
+        time_point_sec end_date;
+        time_point_sec claim_date;
+
+        uint64_t primary_key() const { return order_id; }
+        uint64_t get_user() const { return user; }
+        uint64_t get_miner() const { return miner; }
+        EOSLIB_SERIALIZE(dmc_order, (order_id)(user)(miner)(stake_id)(user_pledge)(miner_pledge)(state)(create_date)(end_date)(claim_date))
+    };
+    typedef eosio::multi_index<N(dmcorder), dmc_order,
+        indexed_by<N(user), const_mem_fun<dmc_order, uint64_t, &dmc_order::get_user>>,
+        indexed_by<N(miner), const_mem_fun<dmc_order, uint64_t, &dmc_order::get_miner>>>
+        dmc_orders;
+
+    // dmc 挑战表
+    struct dmc_challenge {
+        uint64_t order_id;
+        checksum256 merkle_root;
+        uint64_t data_id;
+        checksum256 hash_data;
+        uint64_t challenge_times;
+        std::string nonce;
+
+        uint64_t primary_key() const { return order_id; }
+        EOSLIB_SERIALIZE(dmc_challenge, (order_id)(merkle_root)(data_id)(hash_data)(challenge_times)(nonce))
+    };
+    typedef eosio::multi_index<N(dmchallenge), dmc_challenge> dmc_challenges;
+
 private:
     inline static account_name get_foundation(account_name issuer)
     {
@@ -375,7 +486,7 @@ private:
     extended_asset get_balance(extended_asset quantity, account_name name);
 
 private:
-    void calbonus(account_name owner, uint64_t primary, bool unstake);
+    void calbonus(account_name owner, uint64_t primary, bool unstake, account_name ram_payer);
 };
 
 asset token::get_supply(symbol_type sym) const
@@ -383,6 +494,17 @@ asset token::get_supply(symbol_type sym) const
     stats statstable(_self, system_account);
     const auto& st = statstable.get(symbol_type(CORE_SYMBOL).name());
     return st.get_supply();
+}
+
+std::string token::uint32_to_string(uint32_t value)
+{
+    std::string result;
+    do {
+        result += "0123456789"[value % 10];
+        value /= 10;
+    } while (value);
+    std::reverse(result.begin(), result.end());
+    return result;
 }
 
 template <typename T>

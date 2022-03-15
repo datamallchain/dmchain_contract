@@ -3,6 +3,12 @@
    "types": [{
       "new_type_name": "account_name",
       "type": "name"
+   },{
+      "new_type_name": "OrderState",
+      "type": "uint8"
+   },{
+      "new_type_name": "checksum_array",
+      "type": "checksum256[]"
    }],
   "structs": [{
       "name": "extended_symbol",
@@ -261,6 +267,7 @@
       "base": "",
       "fields": [
         {"name":"primary", "type":"uint64"},
+        {"name":"stake_id", "type":"uint64"},
         {"name":"owner", "type":"account_name"},
         {"name":"matched","type":"extended_asset"},
         {"name":"unmatched","type":"extended_asset"},
@@ -282,7 +289,7 @@
       "base": "",
       "fields": [
         {"name":"owner","type":"account_name"},
-        {"name":"primary","type":"uint64"},
+        {"name":"stake_id","type":"uint64"},
         {"name":"memo","type":"string"}
       ]
     },{
@@ -290,7 +297,7 @@
       "base": "",
       "fields": [
         {"name":"owner","type":"account_name"},
-        {"name":"primary","type":"uint64"}
+        {"name":"stake_id","type":"uint64"}
       ]
     }, {
       "name": "pst_stats",
@@ -328,6 +335,113 @@
       "base": "",
       "fields": [
         {"name":"memo","type": "string"}
+      ]
+    },{
+      "name": "addmerkle",
+      "base": "",
+      "fields": [
+        {"name": "sender","type": "name"},
+        {"name": "order_id","type": "uint64"},
+        {"name": "merkle_root","type": "checksum256"}
+      ]
+    },{
+      "name": "challenge",
+      "base": "",
+      "fields": [
+        {"name": "sender","type": "name"},
+        {"name": "order_id","type": "uint64"},
+        {"name": "data","type": "bytes"},
+        {"name": "cut_merkle","type": "checksum_array[]"}
+      ]
+    },{
+      "name": "dmc_challenge",
+      "base": "",
+      "fields": [
+        {"name": "order_id","type": "uint64"},
+        {"name": "merkle_root","type": "checksum256"},
+        {"name": "data_id","type": "uint64"},
+        {"name": "hash_data","type": "checksum256"},
+        {"name": "challenge_times","type": "uint64"},
+        {"name": "nonce","type": "string"}
+      ]
+    },{          
+      "name": "dmc_order",
+      "base": "",
+      "fields": [
+        {"name": "order_id","type": "uint64"},
+        {"name": "user","type": "account_name"},
+        {"name": "miner","type": "account_name"},
+        {"name": "stake_id","type": "uint64"},
+        {"name": "user_pledge","type": "extended_asset"},
+        {"name": "miner_pledge","type": "extended_asset"},
+        {"name": "state","type": "OrderState"},
+        {"name": "create_date","type": "time_point_sec"},
+        {"name": "update_date","type": "time_point_sec"},
+        {"name": "claim_date","type": "time_point_sec"}
+      ]
+    },{
+      "name": "replyproof",
+      "base": "",
+      "fields": [
+        {"name": "sender","type": "name"},
+        {"name": "order_id","type": "uint64"},
+        {"name": "reply_hash","type": "checksum256"}
+      ]
+    },{
+      "name": "submitproof",
+      "base": "",
+      "fields": [
+        {"name": "sender","type": "name"},
+        {"name": "order_id","type": "uint64"},
+        {"name": "data_id","type": "uint64"},
+        {"name": "key","type": "public_key"},
+        {"name": "sign","type": "signature"},
+        {"name": "nonce","type": "string"}
+      ] 
+    },{
+      "name": "order",
+      "base": "",
+      "fields": [
+        {"name": "owner","type": "account_name"},
+        {"name": "miner","type": "account_name"},
+        {"name": "stake_id","type": "uint64"},
+        {"name": "asset","type": "extended_asset"},
+        {"name": "memo","type": "string"}
+      ]
+    },{
+      "name": "dmc_config",
+      "base": "",
+      "fields": [
+        {"name": "key","type": "account_name"},
+        {"name": "value","type": "uint64"}
+      ]
+    },{
+      "name": "setdmcconfig",
+      "base": "",
+      "fields": [
+        {"name": "key","type": "account_name"},
+        {"name": "value","type": "uint64"}
+      ]
+    },{
+      "name": "claimorder",
+      "base": "",
+      "fields": [
+        {"name": "payer","type": "account_name"},
+        {"name": "order_id","type": "uint64"}
+      ]
+    },{
+      "name": "reneworder",
+      "base": "",
+      "fields": [
+        {"name": "sender","type": "account_name"},
+        {"name": "order_id","type": "uint64"}
+      ]
+    }, {
+      "name": "cancelorder",
+      "base": "",
+      "fields": [
+        {"name": "sender","type": "account_name"},
+        {"name": "order_id","type": "uint64"}
       ]
     }
   ],
@@ -447,6 +561,42 @@
       "name": "allocation",
       "type": "allocation",
       "ricardian_contract": ""
+    },{
+      "name": "addmerkle",
+      "type": "addmerkle",
+      "ricardian_contract": ""
+    },{
+      "name": "replyproof",
+      "type": "replyproof",
+      "ricardian_contract": ""
+    },{
+      "name": "challenge",
+      "type": "challenge",
+      "ricardian_contract": ""
+    },{
+      "name": "submitproof",
+      "type": "submitproof",
+      "ricardian_contract": ""
+    },{
+      "name": "order",
+      "type": "order",
+      "ricardian_contract": ""
+    },{
+      "name": "setdmcconfig",
+      "type": "setdmcconfig",
+      "ricardian_contract": ""
+    },{
+      "name": "claimorder",
+      "type": "claimorder",
+      "ricardian_contract": ""
+    },{
+      "name": "reneworder",
+      "type": "reneworder",
+      "ricardian_contract": ""
+    },{
+      "name": "cancelorder",
+      "type": "cancelorder",
+      "ricardian_contract": ""
     }
   ],
   "tables": [{
@@ -497,6 +647,24 @@
       "index_type": "i64",
       "key_names" : ["stage"],
       "key_types" : ["uint64"]
+    },{
+      "name": "dmchallenge",
+      "type": "dmc_challenge",
+      "index_type": "i64",
+      "key_names": ["order_id"],
+      "key_types": ["uint64"]
+    },{
+      "name": "dmcorder",
+      "type": "dmc_order",
+      "index_type": "i64",
+      "key_names": ["order_id"],
+      "key_types": ["uint64"]
+    },{
+      "name": "dmcconfig",
+      "type": "dmc_config",
+      "index_type": "i64",
+      "key_names": ["key"],
+      "key_types": ["uint64"]
     }
   ],
   "ricardian_clauses": [],

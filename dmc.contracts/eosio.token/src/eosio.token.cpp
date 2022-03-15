@@ -1,4 +1,5 @@
 #include <eosio.token/eosio.token.hpp>
+#include <eosio.token/utils.hpp>
 
 #include "./classic_token.cpp"
 #include "./smart_token.cpp"
@@ -7,6 +8,8 @@
 #include "./record.cpp"
 #include "./uniswap.cpp"
 #include "./dmc.cpp"
+#include "./dmc_challenge.cpp"
+#include "./dmc_deliver.cpp"
 
 namespace eosio {
 
@@ -26,4 +29,8 @@ EOSIO_ABI(eosio::token,
     //
     (addreserves)(outreserves)
     //
-    (stake)(unstake)(getincentive)(setabostats)(allocation))
+    (stake)(unstake)(getincentive)(setabostats)(allocation)(order)
+    //
+    (addmerkle)(submitproof)(replyproof)(challenge)
+    //
+    (setdmcconfig)(claimorder)(reneworder)(cancelorder))
