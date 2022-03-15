@@ -116,7 +116,7 @@ void token::change_order(dmc_order& order, const dmc_challenge& challenge, time_
             order.settlement_pledge += order.lock_pledge;
             order.lock_pledge = extended_asset(0, order.lock_pledge.get_extended_symbol());
             order.miner_rsi += order.miner_lock_rsi;
-            order.miner_lock_rsi -= extended_asset(0, order.miner_lock_rsi.get_extended_symbol());
+            order.miner_lock_rsi = extended_asset(0, order.miner_lock_rsi.get_extended_symbol());
         }
     }
 }
@@ -380,14 +380,14 @@ void token::cancelorder(name sender, uint64_t order_id) {
         order_info.state = OrderStateCancel;
         challenge_info.state = ChallengeCancel;
         distribute_lp_pool(order_info.order_id, order_info.miner_lock_dmc, extended_asset(0, dmc_sym), get_self(), AssetReceiptMinerLock);
+        add_balance(order_info.user, order_info.lock_pledge + order_info.user_pledge + order_info.deposit, sender);
+        SEND_INLINE_ACTION(*this, assetrec, { _self, "active"_n },
+        { order_id, { order_info.lock_pledge, order_info.user_pledge, order_info.deposit }, order_info.user, AssetReceiptCancel});
         order_info.miner_lock_dmc = extended_asset(0, order_info.miner_lock_dmc.get_extended_symbol());
         order_info.lock_pledge = extended_asset(0, order_info.lock_pledge.get_extended_symbol());
         order_info.user_pledge = extended_asset(0, order_info.user_pledge.get_extended_symbol());
         order_info.deposit = extended_asset(0, order_info.deposit.get_extended_symbol());
         order_info.cancel_date = time_point_sec(current_time_point());
-        add_balance(order_info.user, order_info.lock_pledge + order_info.user_pledge + order_info.deposit, sender);
-        SEND_INLINE_ACTION(*this, assetrec, { _self, "active"_n },
-        { order_id, { order_info.lock_pledge, order_info.user_pledge, order_info.deposit }, order_info.user, AssetReceiptCancel});
     } else if (order_info.state == OrderStateDeliver) {
        check(order_info.deposit_valid <= time_point_sec(current_time_point()), "invalid time, can't cancel");
        order_info.cancel_date = time_point_sec(current_time_point());

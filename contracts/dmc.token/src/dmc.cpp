@@ -23,7 +23,7 @@ void token::bill(name owner, extended_asset asset, double price, time_point_sec 
     uint64_t price_t = price * std::pow(2, 32);
     sub_balance(owner, asset);
     bill_stats sst(get_self(), owner.value);
-    
+
     uint64_t bill_id = get_dmc_config("billid"_n, default_id_start);
     bill_record bill_info = {
         .bill_id = bill_id,
@@ -274,6 +274,11 @@ void token::redemption(name owner, double rate, name miner)
 
     bool last_one = false;
     if (rate == 1) {
+        // for tracker
+        dmc_pool.modify(p_iter, owner, [&](auto& s) {
+            s.weight = 0;
+        });
+
         dmc_pool.erase(p_iter);
         auto pool_begin = dmc_pool.begin();
         if (pool_begin == dmc_pool.end()) {
@@ -329,7 +334,6 @@ void token::redemption(name owner, double rate, name miner)
         check(p_iter->weight / (iter->total_weight * (1 - iter->miner_rate)) >= 0.01, "The remaining weight is too low");
     }
     
-    // TODO: deal the case that the miner redeem all
     SEND_INLINE_ACTION(*this, makerecord, {_self, "active"_n}, {*iter});
     SEND_INLINE_ACTION(*this, makerpoolrec, {_self, "active"_n}, {miner, {*p_iter} });
 }
@@ -554,10 +558,11 @@ uint64_t token::calbonus(name owner, uint64_t bill_id, name ram_payer)
         uint64_t duration = now_time_t - updated_at_t;
         check(duration <= now_time_t, "subtractive overflow"); // never happened
 
-        extended_asset quantity = get_asset_by_amount<double, std::floor>(incentive_rate * get_dmc_config("bmrate"_n, default_benchmark_stake_rate) / 100.0 / default_bill_dmc_claims_interval, rsi_sym);
-        quantity.quantity.amount *= duration;
-        quantity.quantity.amount *= ust->unmatched.quantity.amount;
-        if (quantity.quantity.amount != 0) {
+        extended_asset quantity = get_asset_by_amount<double, std::floor>(
+            incentive_rate * duration * ust->unmatched.quantity.amount * get_dmc_config("bmrate"_n, default_benchmark_stake_rate) / 100.0 / default_bill_dmc_claims_interval,
+            rsi_sym);
+
+        if (quantity.quantity.amount > 0) {
             extended_asset dmc_quantity = get_dmc_by_vrsi(quantity);
 
             if (dmc_quantity.quantity.amount > 0) {
@@ -567,6 +572,9 @@ uint64_t token::calbonus(name owner, uint64_t bill_id, name ram_payer)
                 });
                 SEND_INLINE_ACTION(*this, incentiverec, {_self, "active"_n}, {owner, dmc_quantity, bill_id});
             }
+        } else {
+            // if quantity is 0, don't update updated_at
+            now_time_t = updated_at_t;
         }
     }
     return now_time_t;
@@ -746,7 +754,7 @@ void token::allocation(string memo)
             break;
         } else {
             auto duration_time = now_time.sec_since_epoch() - it->last_foundation_released_at.sec_since_epoch();
-
+        
             if (duration_time / 86400 == 0) // 24 * 60 * 60
                 break;
             auto remaining_time = it->end_at.sec_since_epoch() - it->last_foundation_released_at.sec_since_epoch();
