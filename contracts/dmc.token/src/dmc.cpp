@@ -167,13 +167,11 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
     generate_maker_snapshot(order_info.order_id, bill_id, order_info.miner, owner, r, maker_iter->total_staked.quantity.amount == 0);
     trace_price_history(price, bill_id);
     set_dmc_config("orderid"_n, order_id + 1);
-    SEND_INLINE_ACTION(*this, orderrec, { _self, "active"_n }, { order_info });
+    SEND_INLINE_ACTION(*this, orderrec, { _self, "active"_n }, { order_info, 1 });
     SEND_INLINE_ACTION(*this, challengerec, { _self, "active"_n }, { challenge_info });
     SEND_INLINE_ACTION(*this, billsnap, { _self, "active"_n }, { *ust });
     SEND_INLINE_ACTION(*this, assetrec, { _self, "active"_n }, { order_info.order_id, { reserve }, order_info.user, AssetReceiptAddReserve});
-    SEND_INLINE_ACTION(*this, orderassrec, { _self, "active"_n }, { order_info.order_id, { reserve }, order_info.user,  ACC_TYPE_USER, OrderReceiptAddReserve, time_point_sec(current_time_point())});
-    SEND_INLINE_ACTION(*this, orderassrec, { _self, "active"_n }, { order_info.order_id, { -user_to_deposit }, order_info.user,  ACC_TYPE_USER, OrderReceiptDeposit, time_point_sec(current_time_point())});
-    SEND_INLINE_ACTION(*this, orderassrec, { _self, "active"_n }, { order_info.order_id, { -user_to_pay }, order_info.user,  ACC_TYPE_USER, OrderReceiptRenew, time_point_sec(current_time_point())});
+    SEND_INLINE_ACTION(*this, orderassrec, { _self, "active"_n }, { order_info.order_id, { {reserve, OrderReceiptAddReserve}, {-user_to_deposit, OrderReceiptDeposit}, {-user_to_pay, OrderReceiptRenew}}, order_info.user,  ACC_TYPE_USER, time_point_sec(current_time_point())});
 }
 
 void token::increase(name owner, extended_asset asset, name miner)
@@ -778,4 +776,82 @@ void token::allocation(string memo)
     }
 }
 
-} // namespace eosio
+// delete it after 
+// incloude initmaker and struct poolholder
+void token::initmaker(name miner, double current_rate, double miner_rate, double total_weight, extended_asset total_staked, std::vector<poolholder> poolholder) {
+    require_auth(system_account);
+    check(current_rate > 0, "current_rate must be greater than 0");
+    check(miner_rate > 0 && miner_rate <= 1, "miner_rate must be greater than 0");
+    check(total_weight > 0, "total_weight must be greater than 0");
+    check(total_staked.quantity.amount > 0, "total_staked must be greater than 0");
+    check(poolholder.size() > 0, "poolholder must be greater than 0");
+    check(total_staked.get_extended_symbol() == dmc_sym, "total_staked must be DMC symbol");
+
+    dmc_makers maker_tbl(get_self(), get_self().value);
+    auto iter = maker_tbl.find(miner.value);
+    dmc_maker_pool dmc_pool(get_self(), miner.value);
+    auto p_iter = dmc_pool.find(miner.value);
+    uint64_t benchmark_stake_rate = get_dmc_config("bmrate"_n, default_benchmark_stake_rate);
+    
+    if (iter == maker_tbl.end()) {
+        add_stats(total_staked);
+        iter = maker_tbl.emplace(system_account, [&](auto& m) {
+            m.miner = miner;
+            m.current_rate = current_rate;
+            m.miner_rate = miner_rate;
+            m.total_weight = total_weight;
+            m.total_staked = total_staked;
+            m.benchmark_stake_rate = benchmark_stake_rate;
+        });
+        for (auto& p : poolholder) {
+            p_iter = dmc_pool.emplace(system_account, [&](auto& x) {
+                x.owner = p.owner;
+                x.weight = p.weight;
+            });
+            SEND_INLINE_ACTION(*this, makerpoolrec, {_self, "active"_n}, {miner, {*p_iter} });
+        }
+    } else {
+        // reset
+        sub_stats(iter->total_staked);
+        add_stats(total_staked);
+        maker_tbl.modify(iter, system_account, [&](auto& m) {
+            m.current_rate = current_rate;
+            m.miner_rate = miner_rate;
+            m.total_weight = total_weight;
+            m.total_staked = total_staked;
+            m.benchmark_stake_rate = benchmark_stake_rate;
+        });
+        for(auto p_iter = dmc_pool.begin(); p_iter != dmc_pool.end();) {
+            p_iter = dmc_pool.erase(p_iter);
+        }
+        for (auto& p : poolholder) {
+            p_iter = dmc_pool.emplace(system_account, [&](auto& x) {
+                x.owner = p.owner;
+                x.weight = p.weight;
+            });
+            SEND_INLINE_ACTION(*this, makerpoolrec, {_self, "active"_n}, {miner, {*p_iter} });
+        }
+    }
+    SEND_INLINE_ACTION(*this, makerecord, {_self, "active"_n}, {*iter});
+}
+
+// delete it after  
+void token::initprice(double price) {
+    require_auth(system_account);
+    price_table ptb(get_self(), get_self().value);
+    avg_table atb(get_self(), get_self().value);
+    ptb.emplace(_self, [&](auto& p) {
+        p.primary = ptb.available_primary_key();
+        p.bill_id = 0;
+        p.price = price;
+        p.created_at = time_point_sec(current_time_point());
+    });
+
+    atb.emplace(_self, [&](auto& a) {
+        a.primary = 0;
+        a.total = price;
+        a.count = 1;
+        a.avg = price;
+    });
+}
+}  // namespace eosio

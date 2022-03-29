@@ -368,7 +368,7 @@ extended_asset token::allocation_penalty(time_point_sec now_time)
     return to_penalty;
 }
 
-void token::increase_penalty(extended_asset quantity)
+void token::increase_penalty(extended_asset quantity) 
 {
     check(quantity.get_extended_symbol() == dmc_sym, "only DMC can be penalty");
     time_point_sec now_time = time_point_sec(current_time_point());
@@ -377,30 +377,34 @@ void token::increase_penalty(extended_asset quantity)
     uint64_t sec_to_nearest_hour = nearest_hour_time - now_time_t;
     uint64_t copies = 11;
 
-    auto final_end_time = time_point_sec(nearest_hour_time) + eosio::hours(copies); 
+    auto final_end_time = time_point_sec(nearest_hour_time) + eosio::hours(copies);
     uint64_t sec_to_final_end_time = final_end_time.sec_since_epoch() - now_time_t;
     double per = (double)sec_to_nearest_hour / (double)sec_to_final_end_time;
-    uint64_t first_period_amount = std::round(quantity.quantity.amount * per);
-    uint64_t other_period_total_amount = quantity.quantity.amount - first_period_amount;
-    uint64_t period_amount = other_period_total_amount / copies;
-    
+
+    extended_asset first_period = extended_asset(quantity.quantity.amount * per, dmc_sym);
+    extended_asset other_period_total = quantity - first_period;
+    extended_asset other_period = extended_asset(other_period_total.quantity.amount / copies, dmc_sym);
+    // for rounding error
+    extended_asset real_other_period_total = extended_asset(other_period.quantity.amount * copies, dmc_sym);
+    extended_asset real_first_period = first_period + (other_period_total - real_other_period_total);
+
     extended_asset dmc_quantity = allocation_penalty(now_time);
     exchange_from_uniswap(dmc_quantity);
 
     penaltystats penst(get_self(), get_self().value);
 
-    // the first period 
+    // the first period
     {
         auto it = penst.begin();
         if (it != penst.end()) {
             penst.modify(it, get_self(), [&](auto& p) {
-                p.remaining_release.quantity.amount += first_period_amount;
+                p.remaining_release += real_first_period;
             });
         } else {
             penst.emplace(get_self(), [&](auto& p) {
                 p.start_at = now_time;
                 p.end_at = time_point_sec(nearest_hour_time);
-                p.remaining_release = extended_asset(first_period_amount, dmc_sym);
+                p.remaining_release = real_first_period;
             });
         }
     }
@@ -412,13 +416,13 @@ void token::increase_penalty(extended_asset quantity)
         auto it = penst.find(end_time.sec_since_epoch());
         if (it != penst.end()) {
             penst.modify(it, get_self(), [&](auto& p) {
-                p.remaining_release.quantity.amount += period_amount;
+                p.remaining_release += other_period;
             });
         } else {
             penst.emplace(get_self(), [&](auto& p) {
                 p.start_at = start_time;
                 p.end_at = end_time;
-                p.remaining_release = extended_asset(period_amount, dmc_sym);
+                p.remaining_release = other_period;
             });
         }
     }

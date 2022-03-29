@@ -68,7 +68,7 @@ void token::currliqrec(name miner, extended_asset sub_pst)
     require_auth(_self);
 }
 
-void token::orderrec(dmc_order order_info)
+void token::orderrec(dmc_order order_info, uint8_t type)
 {
     require_auth(_self);
 }
@@ -98,7 +98,7 @@ void token::assetrec(uint64_t order_id, std::vector<extended_asset> changed, nam
     require_auth(_self);
 }
 
-void token::orderassrec(uint64_t order_id, std::vector<extended_asset> changed, name owner, AccountType acc_type, OrderReceiptType rec_type, time_point_sec exec_date)
+void token::orderassrec(uint64_t order_id, std::vector<asset_type_args> changed, name owner, AccountType acc_type, time_point_sec exec_date)
 {
     require_auth(_self);
 }
@@ -108,7 +108,7 @@ void token::makersnaprec(maker_snapshot maker_snapshot)
     require_auth(_self);
 }
 
-void token::dismakerec(uint64_t order_id, extended_asset total, std::vector<distribute_maker_snapshot> distribute_info)
+void token::dismakerec(uint64_t order_id, std::vector<asset_type_args> rewards, extended_asset total_sub, std::vector<distribute_maker_snapshot> distribute_info)
 {
     require_auth(_self);
 }

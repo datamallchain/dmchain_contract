@@ -112,26 +112,28 @@ typedef uint8_t AccountType;
 enum e_order_receipt_type {
     OrderReceiptAddReserve = 1,
     OrderReceiptSubReserve = 2,
-    OrderReceiptRenew = 3,
-    OrderReceiptChallengeReq = 4,
-    OrderReceiptChallengeAns = 5,
-    OrderReceiptChallengeArb = 6,
-    OrderReceiptPayChallengeRet = 7,
-    OrderReceiptDeposit = 8,
-    OrderReceiptLockRet = 9,
-    OrderReceiptReward = 10,
-    OrderReceiptEnd = 11,
+    OrderReceiptDeposit = 3,
+    OrderReceiptClaim = 4,
+    OrderReceiptReward = 5,
+    OrderReceiptRenew = 6,
+    OrderReceiptChallengeReq = 7,
+    OrderReceiptChallengeAns = 8,
+    OrderReceiptChallengeArb = 9,
+    OrderReceiptPayChallengeRet = 10,
+    OrderReceiptLockRet = 11,
+    OrderReceiptEnd = 12,
 };
 
 enum e_asset_receipt_type {
     AssetReceiptAddReserve = 1,
     AssetReceiptSubReserve = 2,
     AssetReceiptDeposit = 3,
-    AssetReceiptPayChallenge = 4,
-    AssetReceiptClaim = 5,
-    AssetReceiptCancel = 6,
-    AssetReceiptMinerLock = 7,
-    AssetReceiptEnd = 8,
+    AssetReceiptClaim = 4,
+    AssetReceiptReward = 5,
+    AssetReceiptPayChallenge = 6,
+    AssetReceiptCancel = 7,
+    AssetReceiptMinerLock = 8,
+    AssetReceiptEnd = 9,
 };
 
 
@@ -169,6 +171,11 @@ public:
     struct nft_batch_args {
         uint64_t nft_id;
         extended_asset quantity;
+    };
+
+    struct asset_type_args {
+        extended_asset quant;
+        uint8_t type;
     };
 
 public:
@@ -291,7 +298,7 @@ private:
     extended_asset get_asset_by_amount(T amount, extended_symbol symbol);
 
     void uniswapdeal(name owner, extended_asset& market_from, extended_asset& market_to, extended_asset from, extended_asset to_sym, uint64_t primary, double price, name rampay);
-    
+
     extended_asset exchange_from_uniswap(extended_asset add_balance);
 
     extended_asset get_dmc_by_vrsi(extended_asset rsi_quantity);
@@ -311,11 +318,11 @@ public:
 public:
     ACTION incentiverec(name owner, extended_asset inc, uint64_t bill_id);
     ACTION redeemrec(name owner, name miner, extended_asset asset);
-
+    
     ACTION liqrec(name miner, extended_asset pst_asset, extended_asset dmc_asset);
-
+    
     ACTION billliqrec(name miner, uint64_t bill_id, extended_asset sub_pst);
-
+   
     ACTION currliqrec(name miner, extended_asset sub_pst);
 
 public:
@@ -604,11 +611,22 @@ public:
         uint128_t by_state_id() const { return get_state_id(state, order_id); }
         uint64_t by_user() const { return user.value; }
         uint64_t by_miner() const { return miner.value; }
+        uint64_t by_settlement_date() const { 
+            if (state == OrderStateWaiting) {
+                return uint64_max;
+            } else if (state == OrderStateCancel || state == OrderStateEnd) {
+                if (user_pledge.quantity.amount || lock_pledge.quantity.amount || deposit.quantity.amount) {
+                    return uint64_max;
+                }
+            }
+            return latest_settlement_date.sec_since_epoch(); 
+        }
     };
     typedef eosio::multi_index<"dmcorder"_n, dmc_order,
         indexed_by<"user"_n, const_mem_fun<dmc_order, uint64_t, &dmc_order::by_user>>,
         indexed_by<"miner"_n, const_mem_fun<dmc_order, uint64_t, &dmc_order::by_miner>>,
-        indexed_by<"stateid"_n, const_mem_fun<dmc_order, uint128_t, &dmc_order::by_state_id>>>
+        indexed_by<"stateid"_n, const_mem_fun<dmc_order, uint128_t, &dmc_order::by_state_id>>,
+        indexed_by<"settlement"_n, const_mem_fun<dmc_order, uint64_t, &dmc_order::by_settlement_date>>>
         dmc_orders;
 
     TABLE dmc_challenge {
@@ -631,12 +649,6 @@ public:
         uint64_t primary_key() const { return order_id; }
     };
     typedef eosio::multi_index<"dmchallenge"_n, dmc_challenge> dmc_challenges;
-
-    struct limited_partner {
-        name owner;
-        extended_asset staked;
-        time_point_sec updated_at;
-    };
 
     TABLE dmc_maker {
         name miner;
@@ -714,15 +726,24 @@ public:
     };
 
 public:
-    ACTION orderrec(dmc_order order_info);
+    // 1: create 2: update 3: destory
+    ACTION orderrec(dmc_order order_info, uint8_t type);
     ACTION challengerec(dmc_challenge challenge_info);
     ACTION billsnap(bill_record bill_info);
     ACTION makerecord(dmc_maker maker_info);
     ACTION makerpoolrec(name miner, std::vector<maker_pool> pool_info);
     ACTION makersnaprec(maker_snapshot maker_snapshot);
-    ACTION dismakerec(uint64_t order_id, extended_asset total, std::vector<distribute_maker_snapshot> distribute_info);
+    ACTION dismakerec(uint64_t order_id, std::vector<asset_type_args> rewards, extended_asset total_sub, std::vector<distribute_maker_snapshot> distribute_info);
     ACTION assetrec(uint64_t order_id, std::vector<extended_asset> changed, name owner, AssetReceiptType rec_type);
-    ACTION orderassrec(uint64_t order_id, std::vector<extended_asset> changed, name owner, AccountType acc_type, OrderReceiptType rec_type, time_point_sec exec_date);
+    ACTION orderassrec(uint64_t order_id, std::vector<asset_type_args> changed, name owner, AccountType acc_type, time_point_sec exec_date);
+
+public: 
+    struct poolholder { 
+        name owner; 
+        double weight;
+    };
+    ACTION initmaker(name miner, double current_rate, double miner_rate, double total_weight, extended_asset total_staked, std::vector<poolholder> poolholder);
+    ACTION initprice(double price);
 
 private:
     inline static name get_foundation(name issuer)
@@ -748,7 +769,7 @@ private:
     void update_order_asset(dmc_order& order, OrderState new_state, uint64_t claims_interval);
     void change_order(dmc_order& order, const dmc_challenge& challenge, time_point_sec current, uint64_t claims_interval, name payer);
     void update_order(dmc_order& order, const dmc_challenge& challenge, name payer);
-    extended_asset distribute_lp_pool(uint64_t order_id, extended_asset pledge, extended_asset challenge_pledge, name payer,  AssetReceiptType rec_type);
+    extended_asset distribute_lp_pool(uint64_t order_id, std::vector<asset_type_args> rewards, extended_asset challenge_pledge, name payer);
     void phishing_challenge();
 };
 
