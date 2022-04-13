@@ -310,9 +310,11 @@ void token::paychallenge(name sender, uint64_t order_id)
     increase_penalty(system_reward);
     
     add_balance(order_info.user,  (miner_arbitration - system_reward) + order_info.deposit, sender);
-    SEND_INLINE_ACTION(*this, assetrec, { _self, "active"_n }, { order_id, { order_info.deposit }, order_info.user, AssetReceiptDeposit});
+    if (order_info.deposit.quantity.amount > 0) {
+         SEND_INLINE_ACTION(*this, assetrec, { _self, "active"_n }, { order_id, { order_info.deposit }, order_info.user, AssetReceiptDeposit});
+         order_info.deposit = extended_asset(0, order_info.deposit.get_extended_symbol());
+    }
     SEND_INLINE_ACTION(*this, assetrec, { _self, "active"_n }, { order_id, { miner_arbitration - system_reward }, order_info.user, AssetReceiptPayChallenge});
-    order_info.deposit = extended_asset(0, order_info.deposit.get_extended_symbol());
     order_info.miner_lock_dmc = extended_asset(0, dmc_sym);
     order_info.lock_pledge -= order_info.price;
     order_info.user_pledge += challenge_iter->user_lock + order_info.price;
@@ -321,16 +323,34 @@ void token::paychallenge(name sender, uint64_t order_id)
     if (challenge_iter->user_lock.quantity.amount != 0) {
         SEND_INLINE_ACTION(*this, orderassrec, { _self, "active"_n }, { order_id, { {challenge_iter->user_lock, OrderReceiptPayChallengeRet} }, order_info.user,  ACC_TYPE_USER, time_point_sec(current_time_point())});
     }
-    order_tbl.modify(order_iter, sender, [&](auto& o) {
-        o = order_info;
-    });
 
-    challenge_tbl.modify(challenge_iter, sender, [&](auto& c) {
-        c.state = ChallengeTimeout;
-        c.user_lock = extended_asset(0, c.user_lock.get_extended_symbol());
-    });
+    bool deleted = false;
+    if ((!order_info.lock_pledge.quantity.amount) && (!order_info.miner_lock_rsi.quantity.amount) && 
+        (!order_info.miner_lock_dmc.quantity.amount) && (!order_info.settlement_pledge.quantity.amount)) {
+            if (order_info.user_pledge.quantity.amount) {
+                add_balance(order_info.user, order_info.user_pledge, sender);
+                SEND_INLINE_ACTION(*this, assetrec, { _self, "active"_n }, { order_id, { order_info.user_pledge }, order_info.user, AssetReceiptSubReserve});
+                order_info.user_pledge = extended_asset(0, order_info.user_pledge.get_extended_symbol());
+            }
+            deleted = true;
+    }
 
-    SEND_INLINE_ACTION(*this, orderrec, { _self, "active"_n }, { *order_iter, 2 });
-    SEND_INLINE_ACTION(*this, challengerec, { _self, "active"_n }, { *challenge_iter });
+    auto challenge = *challenge_iter;
+    challenge.state = ChallengeTimeout;
+    challenge.user_lock = extended_asset(0, challenge.user_lock.get_extended_symbol());
+    if (deleted) {
+        order_tbl.erase(order_iter);
+        challenge_tbl.erase(challenge_iter);
+    } else {
+        order_tbl.modify(order_iter, sender, [&](auto& o) {
+            o = order_info;
+        });
+        challenge_tbl.modify(challenge_iter, sender, [&](auto& c) {
+            c = challenge;
+        });
+    }
+
+    SEND_INLINE_ACTION(*this, orderrec, { _self, "active"_n }, { order_info, 2 });
+    SEND_INLINE_ACTION(*this, challengerec, { _self, "active"_n }, { challenge });
 }
 }

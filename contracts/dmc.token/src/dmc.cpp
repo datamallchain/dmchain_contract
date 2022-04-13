@@ -102,6 +102,10 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
         s.updated_at = time_point_sec(now_time_t);
     });
 
+    if(ust->unmatched.quantity.amount == 0) {
+        sst.erase(ust);
+    }
+
     uint64_t claims_interval = get_dmc_config("claiminter"_n, default_dmc_claims_interval);
     uint64_t order_id = get_dmc_config("orderid"_n, default_id_start);
     
@@ -165,7 +169,7 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
     });
 
     generate_maker_snapshot(order_info.order_id, bill_id, order_info.miner, owner, r, maker_iter->total_staked.quantity.amount == 0);
-    trace_price_history(price, bill_id);
+    trace_price_history(price, bill_id, order_info.order_id);
     set_dmc_config("orderid"_n, order_id + 1);
     SEND_INLINE_ACTION(*this, orderrec, { _self, "active"_n }, { order_info, 1 });
     SEND_INLINE_ACTION(*this, challengerec, { _self, "active"_n }, { challenge_info });
@@ -315,6 +319,10 @@ void token::redemption(name owner, double rate, name miner)
     lock_add_balance(owner, rede_quantity, time_point_sec(current_time_point() +  eosio::days(3)), owner);
     SEND_INLINE_ACTION(*this, redeemrec, { get_self(), "active"_n }, { owner, miner, rede_quantity });
     if (total_staked.quantity.amount == 0) {
+        // for tracker
+        maker_tbl.modify(iter, get_self(), [&](auto& m) {
+            m.total_weight = 0;
+        });
         maker_tbl.erase(iter);
     } else {
         maker_tbl.modify(iter, get_self(), [&](auto& m) {
@@ -684,12 +692,12 @@ double token::get_dmc_rate(uint64_t rate_value)
     return value * aitr->avg;
 }
 
-void token::trace_price_history(double price, uint64_t bill_id)
+void token::trace_price_history(double price, uint64_t bill_id, uint64_t order_id)
 {
     price_table ptb(get_self(), get_self().value);
     auto iter = ptb.get_index<"bytime"_n>();
     auto now_time = time_point_sec(current_time_point());
-    auto rtime = now_time - price_fluncuation_interval;
+    const uint64_t max_price_distance = get_dmc_config("pricedist"_n, default_max_price_distance);
 
     avg_table atb(get_self(), get_self().value);
     auto aitr = atb.begin();
@@ -702,21 +710,28 @@ void token::trace_price_history(double price, uint64_t bill_id)
         });
     }
 
+    int times = 0;
+    auto rawtime = now_time;
     for (auto it = iter.begin(); it != iter.end();) {
-        if (it->created_at < rtime) {
-            it = iter.erase(it);
+        if (rawtime.sec_since_epoch() / day_sec != it->created_at.sec_since_epoch() / day_sec) {
+            times++;
+        }
+        if (times > max_price_distance) {
             atb.modify(aitr, _self, [&](auto& a) {
                 a.total -= it->price;
                 a.count -= 1;
             });
+            it = iter.erase(it);
         } else {
-            break;
+            rawtime = it->created_at;
+            it++;
         }
     }
 
     ptb.emplace(_self, [&](auto& p) {
         p.primary = ptb.available_primary_key();
         p.bill_id = bill_id;
+        p.order_id = order_id;
         p.price = price;
         p.created_at = now_time;
     });
@@ -752,7 +767,7 @@ void token::allocation(string memo)
             break;
         } else {
             auto duration_time = now_time.sec_since_epoch() - it->last_foundation_released_at.sec_since_epoch();
-        
+
             if (duration_time / 86400 == 0) // 24 * 60 * 60
                 break;
             auto remaining_time = it->end_at.sec_since_epoch() - it->last_foundation_released_at.sec_since_epoch();

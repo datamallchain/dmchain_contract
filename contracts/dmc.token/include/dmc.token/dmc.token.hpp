@@ -39,6 +39,7 @@ constexpr uint64_t default_dmc_challenge_interval = day_sec;
 constexpr uint64_t default_phishing_interval = day_sec;
 constexpr uint64_t default_initial_price = 10;
 constexpr uint64_t default_id_start = 1;
+constexpr uint64_t default_max_price_distance = 7;
 /**
  * the longest service time for bill / order
  * 24 weeks
@@ -298,7 +299,7 @@ private:
     extended_asset get_asset_by_amount(T amount, extended_symbol symbol);
 
     void uniswapdeal(name owner, extended_asset& market_from, extended_asset& market_to, extended_asset from, extended_asset to_sym, uint64_t primary, double price, name rampay);
-
+    
     extended_asset exchange_from_uniswap(extended_asset add_balance);
 
     extended_asset get_dmc_by_vrsi(extended_asset rsi_quantity);
@@ -306,7 +307,7 @@ private:
     extended_asset allocation_abo(time_point_sec now_time);
 
     extended_asset allocation_penalty(time_point_sec now_time);
-
+    
     void increase_penalty(extended_asset quantity);
 
 public:
@@ -320,9 +321,9 @@ public:
     ACTION redeemrec(name owner, name miner, extended_asset asset);
     
     ACTION liqrec(name miner, extended_asset pst_asset, extended_asset dmc_asset);
-    
-    ACTION billliqrec(name miner, uint64_t bill_id, extended_asset sub_pst);
    
+    ACTION billliqrec(name miner, uint64_t bill_id, extended_asset sub_pst);
+    
     ACTION currliqrec(name miner, extended_asset sub_pst);
 
 public:
@@ -346,7 +347,7 @@ private:
 
     // void changestake(name owner, extended_asset asset, uint64_t primary);
 
-    void trace_price_history(double price, uint64_t bill_id);
+    void trace_price_history(double price, uint64_t bill_id, uint64_t order_id);
 
     ChallengeState get_challenge_state(uint64_t order_id);
     bool is_challenge_end(ChallengeState state);
@@ -683,16 +684,21 @@ public:
     TABLE price_history {
         uint64_t primary;
         uint64_t bill_id;
+        uint64_t order_id;
         double price;
         time_point_sec created_at;
 
         uint64_t primary_key() const { return primary; }
         double by_prices() const { return -price; }
-        uint64_t get_time() const { return uint64_t(created_at.sec_since_epoch()); };
+        uint64_t get_time() const { return uint64_max - uint64_t(created_at.sec_since_epoch()); };
+        uint64_t by_bill_id() const { return bill_id; }
+        uint64_t by_order_id() const { return order_id; }
     };
     typedef eosio::multi_index<"dmcprice"_n, price_history,
         indexed_by<"byprice"_n, const_mem_fun<price_history, double, &price_history::by_prices>>,
-        indexed_by<"bytime"_n, const_mem_fun<price_history, uint64_t, &price_history::get_time>>>
+        indexed_by<"bytime"_n, const_mem_fun<price_history, uint64_t, &price_history::get_time>>,
+        indexed_by<"bybill"_n, const_mem_fun<price_history, uint64_t, &price_history::by_bill_id>>,
+        indexed_by<"byorder"_n, const_mem_fun<price_history, uint64_t, &price_history::by_order_id>>>
         price_table;
 
     TABLE price_avg {
