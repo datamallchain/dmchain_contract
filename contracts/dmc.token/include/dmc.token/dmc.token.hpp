@@ -23,6 +23,9 @@ constexpr double uniswap_fee = 0.003;
 constexpr uint64_t uint64_max = ~uint64_t(0);
 constexpr uint64_t minimum_token_precision = 0;
 constexpr double incentive_rate = 0.1;
+// in get_table_row if number is greater than 2^32, it will be converted to string
+// because DMC is 4 precision, so the max price is 2^22
+constexpr uint64_t bill_max_price = 1 << 22;
 
 static const name system_account = "datamall"_n;
 static const name empty_account = name { 0 };
@@ -275,6 +278,7 @@ public:
 
     ACTION updateorder(name payer, uint64_t order_id);
 
+
     ACTION cancelorder(name sender, uint64_t order_id);
 
     ACTION nftcreatesym(extended_symbol nft_symbol, std::string symbol_uri, nft_type type);
@@ -299,7 +303,7 @@ private:
     extended_asset get_asset_by_amount(T amount, extended_symbol symbol);
 
     void uniswapdeal(name owner, extended_asset& market_from, extended_asset& market_to, extended_asset from, extended_asset to_sym, uint64_t primary, double price, name rampay);
-    
+
     extended_asset exchange_from_uniswap(extended_asset add_balance);
 
     extended_asset get_dmc_by_vrsi(extended_asset rsi_quantity);
@@ -307,7 +311,7 @@ private:
     extended_asset allocation_abo(time_point_sec now_time);
 
     extended_asset allocation_penalty(time_point_sec now_time);
-    
+
     void increase_penalty(extended_asset quantity);
 
 public:
@@ -319,11 +323,11 @@ public:
 public:
     ACTION incentiverec(name owner, extended_asset inc, uint64_t bill_id);
     ACTION redeemrec(name owner, name miner, extended_asset asset);
-    
+
     ACTION liqrec(name miner, extended_asset pst_asset, extended_asset dmc_asset);
-   
+
     ACTION billliqrec(name miner, uint64_t bill_id, extended_asset sub_pst);
-    
+
     ACTION currliqrec(name miner, extended_asset sub_pst);
 
 public:
@@ -749,7 +753,7 @@ public:
         double weight;
     };
     ACTION initmaker(name miner, double current_rate, double miner_rate, double total_weight, extended_asset total_staked, std::vector<poolholder> poolholder);
-    ACTION initprice(double price);
+    ACTION initprice(double avg_price, double total_price, std::vector<price_history> price_detail);
 
 private:
     inline static name get_foundation(name issuer)

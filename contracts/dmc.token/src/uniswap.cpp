@@ -328,8 +328,7 @@ extended_asset token::allocation_abo(time_point_sec now_time)
             auto duration_time = now_time.sec_since_epoch() - it->last_user_released_at.sec_since_epoch();
             auto remaining_time = it->end_at.sec_since_epoch() - it->last_user_released_at.sec_since_epoch();
             double per = (double)duration_time / (double)remaining_time;
-            uint64_t total_asset_amount = per * it->remaining_release.quantity.amount;
-            to_user.quantity.amount += total_asset_amount * it->user_rate;
+            uint64_t total_asset_amount = per * it->remaining_release.quantity.amount * it->user_rate;
             ast.modify(it, get_self(), [&](auto& a) {
                 a.last_user_released_at = now_time;
                 a.remaining_release -= to_user;

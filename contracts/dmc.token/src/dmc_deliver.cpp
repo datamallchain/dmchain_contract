@@ -226,7 +226,10 @@ extended_asset token::distribute_lp_pool(uint64_t order_id, std::vector<asset_ty
     std::vector<maker_pool> pool_info;
     std::vector<distribute_maker_snapshot> distribute_info;
     dmc_maker_pool dmc_pool(get_self(), miner.value);
-    for (auto iter = snapshot_iter->lps.begin(); iter != snapshot_iter->lps.end(); iter++) {
+    auto total_add = extended_asset(0, pledge.get_extended_symbol());
+
+    auto iter_rend = snapshot_iter->lps.rend() - 1;
+    for (auto iter = snapshot_iter->lps.rbegin();  iter != iter_rend; iter++) {
         auto owner_pledge = extended_asset(std::floor(iter->ratio * pledge.quantity.amount), pledge.get_extended_symbol());
         auto pool_iter = dmc_pool.find(iter->owner.value);
         if (pool_iter != dmc_pool.end()) {
@@ -241,6 +244,21 @@ extended_asset token::distribute_lp_pool(uint64_t order_id, std::vector<asset_ty
             sub_pledge += owner_pledge;
             distribute_info.push_back({iter->owner, owner_pledge, MakerDistributeAccount});
         }
+        total_add += owner_pledge;
+    }
+    auto owner_pledge = pledge - total_add;
+    auto pool_iter = dmc_pool.find(iter_rend->owner.value);
+    if (pool_iter != dmc_pool.end()) {
+        double owner_weight = (double)owner_pledge.quantity.amount / maker_iter->total_staked.quantity.amount * maker_iter->total_weight;
+        dmc_pool.modify(pool_iter, payer, [&](auto& p) {
+            p.weight = p.weight + owner_weight;
+        });
+        pool_info.emplace_back(*pool_iter);
+        distribute_info.push_back({iter_rend->owner, owner_pledge, MakerDistributePool});
+    } else {
+        add_balance(iter_rend->owner, owner_pledge, payer);
+        sub_pledge += owner_pledge;
+        distribute_info.push_back({iter_rend->owner, owner_pledge, MakerDistributeAccount});
     }
 
     extended_asset new_total = maker_iter->total_staked + (pledge - sub_pledge);
@@ -298,6 +316,7 @@ void token::claimdeposit(name payer, uint64_t order_id) {
     order_tbl.modify(order_iter, payer, [&](auto& o) {
         o = order_info;
     });
+    SEND_INLINE_ACTION(*this, orderrec, { _self, "active"_n }, { order_info, 2 });
 }
 
 void token::claimorder(name payer, uint64_t order_id)

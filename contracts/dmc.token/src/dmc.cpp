@@ -13,14 +13,15 @@ void token::bill(name owner, extended_asset asset, double price, time_point_sec 
     check(memo.size() <= 256, "memo has more than 256 bytes");
     extended_symbol s_sym = asset.get_extended_symbol();
     check(s_sym == pst_sym, "only proof of service token can be billed");
-    check(price >= 0.0001 && price < std::pow(2, 32), "invalid price");
+    check(price >= 0.0001 && price < bill_max_price, "invalid price");
     check(asset.quantity.amount > 0, "must bill a positive amount");
     check(deposit_ratio >= 0 && deposit_ratio <= 99, "invalid deposit ratio");
 
     time_point_sec now_time = time_point_sec(current_time_point());
     check(expire_on >= now_time + get_dmc_config("serverinter"_n, default_service_interval), "invalid service time");
 
-    uint64_t price_t = price * std::pow(2, 32);
+    uint64_t price_t = price * bill_max_price;
+
     sub_balance(owner, asset);
     bill_stats sst(get_self(), owner.value);
 
@@ -85,7 +86,7 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
     check(deposit_valid >= time_point_sec(current_time_point()) + eosio::seconds(order_serivce_epoch), 
         "service not reach minimum deposit expire time");
 
-    double price = (double)ust->price / std::pow(2, 32);
+    double price = (double)ust->price / bill_max_price;
     double dmc_amount = price * asset.quantity.amount;
     extended_asset user_to_pay = get_asset_by_amount<double, std::ceil>(dmc_amount, dmc_sym);
 
@@ -850,23 +851,25 @@ void token::initmaker(name miner, double current_rate, double miner_rate, double
     SEND_INLINE_ACTION(*this, makerecord, {_self, "active"_n}, {*iter});
 }
 
-// delete it after  
-void token::initprice(double price) {
+// delete it after
+void token::initprice(double avg_price, double total_price, std::vector<price_history> price_detail) {
     require_auth(system_account);
     price_table ptb(get_self(), get_self().value);
     avg_table atb(get_self(), get_self().value);
-    ptb.emplace(_self, [&](auto& p) {
-        p.primary = ptb.available_primary_key();
-        p.bill_id = 0;
-        p.price = price;
-        p.created_at = time_point_sec(current_time_point());
-    });
+    for (const auto& p : price_detail) {
+        ptb.emplace(_self, [&](auto& x) {
+            x.primary = ptb.available_primary_key();
+            x.bill_id = p.bill_id;
+            x.price = p.price;
+            x.created_at = p.created_at;
+        });
+    }
 
     atb.emplace(_self, [&](auto& a) {
         a.primary = 0;
-        a.total = price;
-        a.count = 1;
-        a.avg = price;
+        a.total = total_price;
+        a.count = price_detail.size();
+        a.avg = avg_price;
     });
 }
 }  // namespace eosio
