@@ -13,14 +13,16 @@ void token::bill(name owner, extended_asset asset, double price, time_point_sec 
     check(memo.size() <= 256, "memo has more than 256 bytes");
     extended_symbol s_sym = asset.get_extended_symbol();
     check(s_sym == pst_sym, "only proof of service token can be billed");
-    check(price >= 0.0001 && price < bill_max_price, "invalid price");
+    // in get_table_row if number is greater than 2^32, it will be converted to string
+    // because DMC is 4 precision, it will times 10000, so the max price is 2^18
+    check(price >= 0.0001 && price < 1 << 18, "invalid price");
     check(asset.quantity.amount > 0, "must bill a positive amount");
     check(deposit_ratio >= 0 && deposit_ratio <= 99, "invalid deposit ratio");
 
     time_point_sec now_time = time_point_sec(current_time_point());
     check(expire_on >= now_time + get_dmc_config("serverinter"_n, default_service_interval), "invalid service time");
 
-    uint64_t price_t = price * bill_max_price;
+    uint64_t price_t = price * 10000;
 
     sub_balance(owner, asset);
     bill_stats sst(get_self(), owner.value);
@@ -65,7 +67,7 @@ void token::unbill(name owner, uint64_t bill_id, string memo)
     SEND_INLINE_ACTION(*this, billsnap, { _self, "active"_n }, { bill_info });
 }
 
-void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset, extended_asset reserve, string memo, time_point_sec deposit_valid)
+void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset, extended_asset reserve, string memo, uint64_t epoch)
 {
     require_auth(owner);
     check(memo.size() <= 256, "memo has more than 256 bytes");
@@ -82,11 +84,12 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
     check(ust->unmatched >= asset, "overdrawn balance");
 
     uint64_t order_serivce_epoch = get_dmc_config("ordsrvepoch"_n, default_order_service_epoch);
-    check(deposit_valid <= ust->expire_on, "service has expired");
-    check(deposit_valid >= time_point_sec(current_time_point()) + eosio::seconds(order_serivce_epoch), 
-        "service not reach minimum deposit expire time");
+    uint64_t claims_interval = get_dmc_config("claiminter"_n, default_dmc_claims_interval);
 
-    double price = (double)ust->price / bill_max_price;
+    check((time_point_sec(current_time_point()) + claims_interval * epoch) <= ust->expire_on, "service has expired");
+    check((claims_interval * epoch) >= order_serivce_epoch, "service not reach minimum deposit expire time");
+
+    double price = (double)ust->price / 10000;
     double dmc_amount = price * asset.quantity.amount;
     extended_asset user_to_pay = get_asset_by_amount<double, std::ceil>(dmc_amount, dmc_sym);
 
@@ -107,7 +110,6 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
         sst.erase(ust);
     }
 
-    uint64_t claims_interval = get_dmc_config("claiminter"_n, default_dmc_claims_interval);
     uint64_t order_id = get_dmc_config("orderid"_n, default_id_start);
     
     dmc_makers maker_tbl(get_self(), get_self().value);
@@ -140,7 +142,8 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
         .miner_rsi = extended_asset(0, rsi_sym),
         .user_rsi = extended_asset(0, rsi_sym),
         .deposit = user_to_deposit,
-        .deposit_valid = deposit_valid,
+        .epoch = epoch,
+        .deposit_valid = time_point_sec(),
         .cancel_date =  time_point_sec(),
     };
     order_tbl.emplace(owner, [&](auto& o) {

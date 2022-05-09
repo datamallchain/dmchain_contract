@@ -37,6 +37,7 @@ void token::change_order(dmc_order& order, const dmc_challenge& challenge, time_
         if (challenge.state == ChallengeConsistent) {
             order.state = OrderStateDeliver;
             order.deliver_start_date = time_point_sec(current_time_point());
+            order.deposit_valid = time_point_sec(current_time_point()) + claims_interval * order.epoch;
             order.latest_settlement_date = time_point_sec(current_time_point());
         }
     } else if (order.state == OrderStateDeliver) {
@@ -460,7 +461,7 @@ void token::cancelorder(name sender, uint64_t order_id) {
         order_info.deposit = extended_asset(0, order_info.deposit.get_extended_symbol());
         order_info.cancel_date = time_point_sec(current_time_point());
         deleted = true;
-    } else if (order_info.state == OrderStateDeliver) {
+    } else if (order_info.state == OrderStateDeliver || order_info.state == OrderStatePreCont) {
        check(order_info.deposit_valid <= time_point_sec(current_time_point()), "invalid time, can't cancel");
        order_info.cancel_date = time_point_sec(current_time_point());
     } else {

@@ -23,9 +23,6 @@ constexpr double uniswap_fee = 0.003;
 constexpr uint64_t uint64_max = ~uint64_t(0);
 constexpr uint64_t minimum_token_precision = 0;
 constexpr double incentive_rate = 0.1;
-// in get_table_row if number is greater than 2^32, it will be converted to string
-// because DMC is 4 precision, so the max price is 2^22
-constexpr uint64_t bill_max_price = 1 << 22;
 
 static const name system_account = "datamall"_n;
 static const name empty_account = name { 0 };
@@ -236,7 +233,7 @@ public:
 
     ACTION setabostats(uint64_t stage, double user_rate, double foundation_rate, extended_asset total_release, extended_asset remaining_release, time_point_sec start_at, time_point_sec end_at, time_point_sec last_released_at);
 
-    ACTION order(name owner, name miner, uint64_t bill_id, extended_asset asset, extended_asset reserve, string memo, time_point_sec deposit_valid);
+    ACTION order(name owner, name miner, uint64_t bill_id, extended_asset asset, extended_asset reserve, string memo, uint64_t epoch);
 
     ACTION setreserve(name owner, extended_asset dmc_quantity, extended_asset rsi_quantity);
 
@@ -277,7 +274,6 @@ public:
     ACTION subordasset(name sender, uint64_t order_id, extended_asset quantity);
 
     ACTION updateorder(name payer, uint64_t order_id);
-
 
     ACTION cancelorder(name sender, uint64_t order_id);
 
@@ -323,9 +319,9 @@ public:
 public:
     ACTION incentiverec(name owner, extended_asset inc, uint64_t bill_id);
     ACTION redeemrec(name owner, name miner, extended_asset asset);
-
+    
     ACTION liqrec(name miner, extended_asset pst_asset, extended_asset dmc_asset);
-
+    
     ACTION billliqrec(name miner, uint64_t bill_id, extended_asset sub_pst);
 
     ACTION currliqrec(name miner, extended_asset sub_pst);
@@ -528,7 +524,7 @@ public:
         uint64_t get_time() const { return uint64_t(updated_at.sec_since_epoch()); };
         uint64_t by_expire() const { return uint64_t(expire_on.sec_since_epoch()); }
     };
-    typedef eosio::multi_index<"stakerec"_n, bill_record,
+    typedef eosio::multi_index<"billrec"_n, bill_record,
         indexed_by<"bylowerprice"_n, const_mem_fun<bill_record, uint64_t, &bill_record::get_lower>>,
         indexed_by<"bytime"_n, const_mem_fun<bill_record, uint64_t, &bill_record::get_time>>,
         indexed_by<"byexpire"_n, const_mem_fun<bill_record, uint64_t, &bill_record::by_expire>>>
@@ -592,8 +588,8 @@ public:
         name user;
         name miner;
         uint64_t bill_id;
-        extended_asset user_pledge; // dmc
-        extended_asset miner_lock_pst; // pst
+        extended_asset user_pledge;
+        extended_asset miner_lock_pst;
         extended_asset miner_lock_dmc;
         extended_asset price; // dmc per price
         extended_asset settlement_pledge;
@@ -605,6 +601,7 @@ public:
         extended_asset miner_rsi;
         extended_asset user_rsi;
         extended_asset deposit;
+        uint64_t epoch;
         time_point_sec deposit_valid;
         time_point_sec cancel_date;
 
