@@ -267,7 +267,7 @@ void token::arbitration(name sender, uint64_t order_id, const std::vector<char>&
 
     auto order = *order_iter;
     order.user_pledge += challenge_iter->user_lock - user_pay;
-    
+
     increase_penalty(user_pay);
     if ((challenge_iter->user_lock - user_pay).quantity.amount != 0) {
         SEND_INLINE_ACTION(*this, orderassrec, { _self, "active"_n }, { order_id, { {challenge_iter->user_lock - user_pay, OrderReceiptChallengeArb} }, order.user,  ACC_TYPE_USER, time_point_sec(current_time_point())});

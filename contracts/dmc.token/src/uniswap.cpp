@@ -304,21 +304,18 @@ void token::setreserve(name owner, extended_asset dmc_quantity, extended_asset r
     }
 }
 
-// TODO
-extended_asset token::allocation_abo(time_point_sec now_time)
-{
+extended_asset token::allocation_abo(time_point_sec now_time) {
     abostats ast(get_self(), get_self().value);
-    extended_asset to_foundation(0, dmc_sym);
     extended_asset to_user(0, dmc_sym);
 
     for (auto it = ast.begin(); it != ast.end();) {
         if (now_time > it->end_at) {
             if (it->remaining_release.quantity.amount != 0) {
-                to_foundation.quantity.amount += it->remaining_release.quantity.amount * it->foundation_rate;
-                to_user.quantity.amount += it->remaining_release.quantity.amount * it->user_rate;
+                extended_asset curr(it->remaining_release.quantity.amount * it->user_rate, dmc_sym);
+                to_user += curr;
                 ast.modify(it, get_self(), [&](auto& a) {
                     a.last_user_released_at = it->end_at;
-                    a.remaining_release.quantity.amount = 0;
+                    a.remaining_release -= curr;
                 });
             }
             it++;
@@ -328,10 +325,11 @@ extended_asset token::allocation_abo(time_point_sec now_time)
             auto duration_time = now_time.sec_since_epoch() - it->last_user_released_at.sec_since_epoch();
             auto remaining_time = it->end_at.sec_since_epoch() - it->last_user_released_at.sec_since_epoch();
             double per = (double)duration_time / (double)remaining_time;
-            uint64_t total_asset_amount = per * it->remaining_release.quantity.amount * it->user_rate;
+            extended_asset curr(per * it->remaining_release.quantity.amount * it->user_rate, dmc_sym);
+            to_user += curr;
             ast.modify(it, get_self(), [&](auto& a) {
                 a.last_user_released_at = now_time;
-                a.remaining_release -= to_user;
+                a.remaining_release -= curr;
             });
             break;
         }

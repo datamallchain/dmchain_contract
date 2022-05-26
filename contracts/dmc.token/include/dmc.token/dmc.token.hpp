@@ -299,7 +299,7 @@ private:
     extended_asset get_asset_by_amount(T amount, extended_symbol symbol);
 
     void uniswapdeal(name owner, extended_asset& market_from, extended_asset& market_to, extended_asset from, extended_asset to_sym, uint64_t primary, double price, name rampay);
-
+    
     extended_asset exchange_from_uniswap(extended_asset add_balance);
 
     extended_asset get_dmc_by_vrsi(extended_asset rsi_quantity);
@@ -307,7 +307,7 @@ private:
     extended_asset allocation_abo(time_point_sec now_time);
 
     extended_asset allocation_penalty(time_point_sec now_time);
-
+    
     void increase_penalty(extended_asset quantity);
 
 public:
@@ -588,8 +588,8 @@ public:
         name user;
         name miner;
         uint64_t bill_id;
-        extended_asset user_pledge;
-        extended_asset miner_lock_pst;
+        extended_asset user_pledge; // dmc
+        extended_asset miner_lock_pst; // pst
         extended_asset miner_lock_dmc;
         extended_asset price; // dmc per price
         extended_asset settlement_pledge;

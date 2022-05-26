@@ -13,9 +13,8 @@ void token::bill(name owner, extended_asset asset, double price, time_point_sec 
     check(memo.size() <= 256, "memo has more than 256 bytes");
     extended_symbol s_sym = asset.get_extended_symbol();
     check(s_sym == pst_sym, "only proof of service token can be billed");
-    // in get_table_row if number is greater than 2^32, it will be converted to string
-    // because DMC is 4 precision, it will times 10000, so the max price is 2^18
-    check(price >= 0.0001 && price < 1 << 18, "invalid price");
+    // 1 << 14 = 16384 > 10000
+    check(price >= 0.0001 && price < 1 << 50, "invalid price");
     check(asset.quantity.amount > 0, "must bill a positive amount");
     check(deposit_ratio >= 0 && deposit_ratio <= 99, "invalid deposit ratio");
 
@@ -86,7 +85,7 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
     uint64_t order_serivce_epoch = get_dmc_config("ordsrvepoch"_n, default_order_service_epoch);
     uint64_t claims_interval = get_dmc_config("claiminter"_n, default_dmc_claims_interval);
 
-    check((time_point_sec(current_time_point()) + claims_interval * epoch) <= ust->expire_on, "service has expired");
+    check(time_point_sec(current_time_point() + eosio::seconds(claims_interval * epoch)) <= ust->expire_on, "service has expired");
     check((claims_interval * epoch) >= order_serivce_epoch, "service not reach minimum deposit expire time");
 
     double price = (double)ust->price / 10000;
@@ -753,17 +752,15 @@ void token::allocation(string memo)
     check(memo.size() <= 256, "memo has more than 256 bytes");
     abostats ast(get_self(), get_self().value);
     extended_asset to_foundation(0, dmc_sym);
-    extended_asset to_user(0, dmc_sym);
 
     auto now_time = time_point_sec(current_time_point());
     for (auto it = ast.begin(); it != ast.end();) {
         if (now_time > it->end_at) {
             if (it->remaining_release.quantity.amount != 0) {
                 to_foundation.quantity.amount = it->remaining_release.quantity.amount * it->foundation_rate;
-                to_user.quantity.amount = it->remaining_release.quantity.amount * it->user_rate;
                 ast.modify(it, get_self(), [&](auto& a) {
                     a.last_foundation_released_at = it->end_at;
-                    a.remaining_release.quantity.amount = 0;
+                    a.remaining_release -= to_foundation;
                 });
             }
             it++;
@@ -778,12 +775,13 @@ void token::allocation(string memo)
             double per = (double)duration_time / (double)remaining_time;
             if (per > 1)
                 per = 1;
-            uint64_t total_asset_amount = per * it->remaining_release.quantity.amount;
+            uint64_t total_asset_amount = per * it->remaining_release.quantity.amount * it->foundation_rate;
             if (total_asset_amount != 0) {
-                to_foundation.quantity.amount = total_asset_amount * it->foundation_rate;
+                extended_asset curr_release(total_asset_amount, dmc_sym);
+                to_foundation += curr_release;
                 ast.modify(it, get_self(), [&](auto& a) {
                     a.last_foundation_released_at = now_time;
-                    a.remaining_release -= to_foundation;
+                    a.remaining_release -= curr_release;
                 });
             }
             break;
@@ -812,6 +810,7 @@ void token::initmaker(name miner, double current_rate, double miner_rate, double
     auto p_iter = dmc_pool.find(miner.value);
     uint64_t benchmark_stake_rate = get_dmc_config("bmrate"_n, default_benchmark_stake_rate);
     
+    // because of marker, we need send makerrecord first
     if (iter == maker_tbl.end()) {
         add_stats(total_staked);
         iter = maker_tbl.emplace(system_account, [&](auto& m) {
@@ -822,6 +821,7 @@ void token::initmaker(name miner, double current_rate, double miner_rate, double
             m.total_staked = total_staked;
             m.benchmark_stake_rate = benchmark_stake_rate;
         });
+        SEND_INLINE_ACTION(*this, makerecord, {_self, "active"_n}, {*iter});
         for (auto& p : poolholder) {
             p_iter = dmc_pool.emplace(system_account, [&](auto& x) {
                 x.owner = p.owner;
@@ -840,6 +840,7 @@ void token::initmaker(name miner, double current_rate, double miner_rate, double
             m.total_staked = total_staked;
             m.benchmark_stake_rate = benchmark_stake_rate;
         });
+        SEND_INLINE_ACTION(*this, makerecord, {_self, "active"_n}, {*iter});
         for(auto p_iter = dmc_pool.begin(); p_iter != dmc_pool.end();) {
             p_iter = dmc_pool.erase(p_iter);
         }
@@ -851,7 +852,6 @@ void token::initmaker(name miner, double current_rate, double miner_rate, double
             SEND_INLINE_ACTION(*this, makerpoolrec, {_self, "active"_n}, {miner, {*p_iter} });
         }
     }
-    SEND_INLINE_ACTION(*this, makerecord, {_self, "active"_n}, {*iter});
 }
 
 // delete it after

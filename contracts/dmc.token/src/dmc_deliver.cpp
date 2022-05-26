@@ -37,7 +37,7 @@ void token::change_order(dmc_order& order, const dmc_challenge& challenge, time_
         if (challenge.state == ChallengeConsistent) {
             order.state = OrderStateDeliver;
             order.deliver_start_date = time_point_sec(current_time_point());
-            order.deposit_valid = time_point_sec(current_time_point()) + claims_interval * order.epoch;
+            order.deposit_valid = time_point_sec(current_time_point() + eosio::seconds(claims_interval * order.epoch));
             order.latest_settlement_date = time_point_sec(current_time_point());
         }
     } else if (order.state == OrderStateDeliver) {
