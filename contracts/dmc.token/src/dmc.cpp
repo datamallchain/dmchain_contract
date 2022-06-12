@@ -14,7 +14,7 @@ void token::bill(name owner, extended_asset asset, double price, time_point_sec 
     extended_symbol s_sym = asset.get_extended_symbol();
     check(s_sym == pst_sym, "only proof of service token can be billed");
     // 1 << 14 = 16384 > 10000
-    check(price >= 0.0001 && price < 1 << 50, "invalid price");
+    check(price >= 0.0001 && (price < (uint64_t(1) << 50)), "invalid price");
     check(asset.quantity.amount > 0, "must bill a positive amount");
     check(deposit_ratio >= 0 && deposit_ratio <= 99, "invalid deposit ratio");
 
@@ -625,7 +625,7 @@ void token::setabostats(uint64_t stage, double user_rate, double foundation_rate
 
 void token::setdmcconfig(name key, uint64_t value)
 {
-    require_auth(dmc_account);
+    require_auth(config_account);
     dmc_global dmc_global_tbl(get_self(), get_self().value);
     switch (key.value) {
     case ("claiminter"_n).value:

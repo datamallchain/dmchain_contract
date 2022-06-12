@@ -26,18 +26,25 @@ void token::phishing_challenge() {
     if (phishing_date + phishing_interval > time_point_sec(current_time_point())) {
         return;
     }
-    extended_asset zero_dmc = extended_asset(0, dmc_sym);
-    auto hash = sha256<order_id_args>({ _self, _self, 0, zero_dmc, zero_dmc, std::string(""), time_point_sec(current_time_point()) });
-    uint64_t order_id = uint64_t(*reinterpret_cast<const uint64_t*>(&hash));
+
     dmc_orders order_tbl(get_self(), get_self().value);
+    if (order_tbl.begin() == order_tbl.end()) {
+        return;
+    }
+    uint64_t order_id_begin = order_tbl.begin()->order_id;
+    uint64_t order_id_end = get_dmc_config("orderid"_n, default_id_start);
+    uint64_t tpos_mult = uint64_t(tapos_block_prefix()) * tapos_block_num();
+    uint64_t rand = tpos_mult % (order_id_end - order_id_begin);
+    uint64_t order_id = order_id_begin + rand;
+
     auto state_id_idx = order_tbl.get_index<"stateid"_n>();
     auto state_id_iter = state_id_idx.lower_bound(dmc_order::get_state_id(OrderStateDeliver, order_id));
     if (state_id_iter != state_id_idx.end() && state_id_iter->state == OrderStateDeliver) {
         dmc_challenges challenge_tbl(get_self(), get_self().value);
         auto challenge_iter = challenge_tbl.find(state_id_iter->order_id);
         if (is_challenge_end(challenge_iter->state) && challenge_iter->data_block_count) {
-            auto challenge_hash = sha256<order_id_args>({ _self, _self, uint64_t(tapos_block_num()) * tapos_block_prefix(), zero_dmc, zero_dmc, std::string("challenge"), time_point_sec(current_time_point()) });
-            uint64_t data_id = uint64_t(*reinterpret_cast<const uint64_t*>(&hash)) % challenge_iter->data_block_count;
+            auto challenge_hash = sha256((char*)&tpos_mult, sizeof(uint64_t));
+            uint64_t data_id = uint64_t(*reinterpret_cast<const uint64_t*>(&challenge_hash)) % challenge_iter->data_block_count;
             SEND_INLINE_ACTION(*this, reqchallenge, { _self, "active"_n }, { _self, state_id_iter->order_id, data_id, challenge_hash, std::string("phishing")});
             dmc_global_tbl.modify(phishing_date_iter, get_self(), [&](auto& d) {
                 d.value = current_time_point().sec_since_epoch();

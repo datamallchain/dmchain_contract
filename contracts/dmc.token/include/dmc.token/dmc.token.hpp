@@ -25,6 +25,7 @@ constexpr uint64_t minimum_token_precision = 0;
 constexpr double incentive_rate = 0.1;
 
 static const name system_account = "datamall"_n;
+static const name config_account = "dmcconfigura"_n;
 static const name empty_account = name { 0 };
 static constexpr symbol fee_sym = symbol(symbol_code("FEE"), 4);
 static const extended_symbol pst_sym = extended_symbol(symbol(symbol_code("PST"), 0), system_account);
@@ -323,7 +324,7 @@ public:
     ACTION liqrec(name miner, extended_asset pst_asset, extended_asset dmc_asset);
     
     ACTION billliqrec(name miner, uint64_t bill_id, extended_asset sub_pst);
-
+    
     ACTION currliqrec(name miner, extended_asset sub_pst);
 
 public:
@@ -564,16 +565,6 @@ public:
         EOSLIB_SERIALIZE(penalty_stats, (start_at)(end_at)(remaining_release))
     };
     typedef eosio::multi_index<"penaltystats"_n, penalty_stats> penaltystats;
-
-    struct order_id_args {
-        name owner;
-        name miner;
-        uint64_t bill_id;
-        extended_asset asset;
-        extended_asset reserve;
-        string memo;
-        time_point_sec now;
-    };
 
     TABLE dmc_config {
         name key;

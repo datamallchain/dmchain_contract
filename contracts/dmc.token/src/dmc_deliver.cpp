@@ -70,7 +70,7 @@ void token::change_order(dmc_order& order, const dmc_challenge& challenge, time_
         std::vector<asset_type_args> rewards;
         rewards.push_back({order.miner_lock_dmc, AssetReceiptMinerLock});
         if (order.deposit.quantity.amount > 0) {
-            if (order.deposit_valid >= order.latest_settlement_date) {
+            if (order.deposit_valid > order.latest_settlement_date) {
                 rewards.push_back({order.deposit, AssetReceiptDeposit});
             } else {
                 add_balance(order.user, order.deposit, payer);
@@ -88,7 +88,7 @@ void token::change_order(dmc_order& order, const dmc_challenge& challenge, time_
         std::vector<asset_type_args> rewards;
         rewards.push_back({order.miner_lock_dmc, AssetReceiptMinerLock});
         if (order.deposit.quantity.amount > 0) {
-            if (order.deposit_valid >= order.latest_settlement_date) {
+            if (order.deposit_valid > order.latest_settlement_date) {
                 rewards.push_back({order.deposit, AssetReceiptDeposit});
             } else {
                 add_balance(order.user, order.deposit, payer);
@@ -201,22 +201,24 @@ extended_asset token::distribute_lp_pool(uint64_t order_id, std::vector<asset_ty
         if (rewards[i].type == AssetReceiptClaim || rewards[i].type == AssetReceiptDeposit || rewards[i].type == AssetReceiptReward) {
             double current_r = snapshot_iter->rate / 100.0;
             auto miner_dmc_pledge = extended_asset(round(rewards[i].quant.quantity.amount / (current_r + 1.0)), rewards[i].quant.get_extended_symbol());
-            auto remain_pay = miner_dmc_pledge.quantity > challenge_pledge.quantity ? extended_asset(0, challenge_pledge.get_extended_symbol()) : challenge_pledge - miner_dmc_pledge;
-            miner_dmc_pledge = miner_dmc_pledge.quantity > challenge_pledge.quantity ? miner_dmc_pledge - challenge_pledge : extended_asset(0, miner_dmc_pledge.get_extended_symbol());
+            rewards[i].quant -= miner_dmc_pledge;
+
+            auto challenge_pay = miner_dmc_pledge.quantity > challenge_pledge.quantity ? challenge_pledge : miner_dmc_pledge;
+            miner_dmc_pledge -= challenge_pay;
             if (miner_dmc_pledge.quantity.amount) {
                 add_balance(miner, miner_dmc_pledge, payer);
                 miner_receipt.push_back({miner_dmc_pledge, rewards[i].type});
                 SEND_INLINE_ACTION(*this, assetrec, {_self, "active"_n}, {order_id, {miner_dmc_pledge}, miner, rewards[i].type});
             }
-            if ((challenge_pledge - remain_pay).quantity.amount > 0) {
-                miner_receipt.push_back({remain_pay - challenge_pledge, OrderReceiptChallengeAns});
-                increase_penalty(challenge_pledge - remain_pay);
+            if (challenge_pay.quantity.amount > 0) {
+                miner_receipt.push_back({-challenge_pay, OrderReceiptChallengeAns});
+                increase_penalty(challenge_pay);
             }
-            if (miner_receipt.size() > 0) {
-                SEND_INLINE_ACTION(*this, orderassrec, {_self, "active"_n}, {order_id, miner_receipt, miner, ACC_TYPE_MINER, time_point_sec(current_time_point())});
-            }
-            rewards[i].quant -= miner_dmc_pledge;
+            challenge_pledge -= challenge_pay;
         }
+    }
+    if (miner_receipt.size() > 0) {
+        SEND_INLINE_ACTION(*this, orderassrec, {_self, "active"_n}, {order_id, miner_receipt, miner, ACC_TYPE_MINER, time_point_sec(current_time_point())});
     }
     extended_asset pledge = extended_asset(0, rewards[0].quant.get_extended_symbol());
     for (uint64_t i = 0; i < rewards.size(); i++) {
@@ -310,7 +312,7 @@ void token::claimdeposit(name payer, uint64_t order_id) {
     update_order(order_info, *challenge_iter, payer);
 
     check(payer == order_iter->user, "only order user can claim deposit");
-    check(order_info.deposit_valid < order_info.latest_settlement_date, "order not reach end, can not deposit");
+    check(order_info.deposit_valid <= order_info.latest_settlement_date, "order not reach end, can not deposit");
     add_balance(order_info.user, order_info.deposit, payer);
     SEND_INLINE_ACTION(*this, assetrec, { _self, "active"_n }, { order_id, { order_info.deposit }, order_info.user, AssetReceiptDeposit});
     order_info.deposit = extended_asset(0, order_info.deposit.get_extended_symbol());
