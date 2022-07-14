@@ -25,7 +25,6 @@ constexpr double miner_scale = 0.8;
 
 // for DMC
 static const account_name system_account = N(datamall);
-static const account_name dmc_foundation = N(dmcfoundation);
 static const account_name empty_account = name { 0 };
 static const extended_symbol pst_sym = extended_symbol(S(0, PST), system_account);
 static const extended_symbol rsi_sym = extended_symbol(S(8, RSI), system_account);
@@ -65,10 +64,42 @@ enum nft_type_struct {
     ERC1155 = 2,
     NftTypeEnd,
 };
+enum e_challenge_state {
+    ChallengePrepare = 0,
+    ChallengeConsistent = 1,
+    ChallengeCancel = 2,
+    ChallengeRequest = 3,
+    ChallengeAnswer = 4,
+    ChallengeArbitrationMinerPay = 5,
+    ChallengeArbitrationUserPay = 6,
+    ChallengeTimeout = 7,
+    ChallengeStateEnd,
+};
 
 enum bill_state {
     BILL = 0,
     UNBILL = 1,
+};
+
+enum e_order_receipt_type {
+    OrderReceiptUpdate = 1,
+    OrderReceiptClaim = 2,
+    OrderReceiptUser = 3,
+    OrderReceiptChallengeReq = 4,
+    OrderReceiptChallengeAns = 5,
+    OrderReceiptChallengeArb = 6,
+    OrderReceiptChallengePayRet = 7,
+    OrderReceiptChallengePayReward = 8,
+    OrderReceiptLockRet = 9,
+    OrderReceiptEnd = 10,
+};
+
+enum e_maker_receipt_type {
+    MakerReceiptClaim = 1,
+    MakerReceiptChallengePay = 2,
+    MakerReceiptIncrease = 3,
+    MakerReceiptRedemption = 4,
+    MakerReceiptLiquidation = 5,
 };
 
 typedef uint8_t OrderState;
@@ -84,6 +115,7 @@ public:
     token(account_name self)
         : contract(self)
     {
+        //set_order_migration(0, self);
     }
 
     struct nft_batch_args {
@@ -302,11 +334,135 @@ public:
     */
     void setmakerrate(account_name owner, double rate);
 
+    /*! @brief 清算
+    @param memo 附言
+    由 onblock 方法调用，定期清算
+    */
+    void liquidation(string memo);
+
+    void cleanpst(string memo);
+
+    /*! @brief 矿工和用户提供一致的默克尔树根信息
+    @param sender 提交者
+    @param order_id 订单id
+    @param merkle_root 默克尔树根
+    */
+    void addmerkle(name sender, uint64_t order_id, checksum256 merkle_root, uint64_t data_block_count);
+
+    /*! @brief 用户请求挑战
+    @param sender 用户账户名
+    @param order_id 订单id
+    @param data_id 数据块id
+    @param hash_data 数据哈希两次后的结果
+    @param nonce 生成hash时的混淆值
+    */
+    void reqchallenge(name sender, uint64_t order_id, uint64_t data_id, checksum256 hash_data, std::string nonce);
+
+    /*! @brief 矿工响应挑战
+    @param sender 矿工账户名
+    @param order_id 订单id
+    @param reply_hash 矿工的数据响应哈希
+    */
+    void anschallenge(name sender, uint64_t order_id, checksum256 reply_hash);
+
+    /*! @brief 矿工完成仲裁
+    @param sender 矿工账户名
+    @param order_id 订单id
+    @param data 数据信息
+    @param cut_merkle 默克尔剪枝树信息
+    */
+    void arbitration(name sender, uint64_t order_id, const std::vector<char>& data, std::vector<checksum256> cut_merkle);
+
+    /*! @brief 挑战超时赔付
+    @param sender 账户名
+    @param order_id 订单id
+    */
+    void paychallenge(name sender, uint64_t order_id);
+
     /*! @brief 设置dmc配置项
     @param payer 配置的键
     @param order_id 配置的值
     */
     void setdmcconfig(account_name key, uint64_t value);
+
+    /*! @brief 领取交付奖励
+    @param payer 账户名
+    @param order_id 订单id
+    */
+    void claimorder(name payer, uint64_t order_id);
+
+    /*! @brief 用户增加订单预存额
+    @param sender 账户名
+    @param order_id 订单id
+    @param order_id 增加数量
+    */
+    void addordasset(name sender, uint64_t order_id, extended_asset quantity);
+
+    /*! @brief 用户减少订单预存额
+    @param sender 账户名
+    @param order_id 订单id
+    @param order_id 减少数量
+    */
+    void subordasset(name sender, uint64_t order_id, extended_asset quantity);
+
+    /*! @brief 更新订单状态
+    @param payer 账户名
+    @param order_id 订单id
+    */
+    void updateorder(name payer, uint64_t order_id);
+
+    /*! @brief 创建nft族别
+    @param nft_symbol nft族的符号
+    @param symbol_uri nft族的描述
+    @param type nft族类别(0: 721, 1: 1155)
+    */
+    void nftcreatesym(extended_symbol nft_symbol, std::string symbol_uri, nft_type type);
+
+    /*! @brief 创建 nft
+    @param to 创建目标账户
+    @param nft_uri nft的描述
+    @param nft_name nft名称
+    @param extra_data 额外数据
+    @param quantity 创建数量
+    */
+    void nftcreate(name to, std::string nft_uri, std::string nft_name, std::string extra_data, extended_asset quantity);
+
+    /*! @brief 增发nft
+    @param to 增发目标账户
+    @param nft_id 要增发nft的id
+    @param quantity 增发数量
+    */
+    void nftissue(name to, uint64_t nft_id, extended_asset quantity);
+
+    /*! @brief 转账nft
+    @param from 转出账户
+    @param to 转入账户
+    @param nft_id 要转账nft的id
+    @param quantity 转账数量
+    @param memo 备注
+    */
+    void nfttransfer(name from, name to, uint64_t nft_id, extended_asset quantity, std::string memo);
+
+    /*! @brief 批量转账nft
+    @param from 转出账户
+    @param to 转入账户
+    @param batch_args 要转账nft的id和数量的数组
+    @param memo 备注
+    */
+    void nfttransferb(name from, name to, std::vector<nft_batch_args> batch_args, std::string memo);
+
+    /*! @brief 销毁nft
+    @param from 销毁操作账户
+    @param nft_id 要销毁nft的id
+    @param quantity 销毁数量
+    */
+    void nftburn(name from, uint64_t nft_id, extended_asset quantity);
+
+    /*! @brief 批量销毁nft
+    @param from 销毁操作账户
+    @param batch_args 要销毁nft的id和数量的数组
+    */
+    void burnbatch(name from, std::vector<nft_batch_args> batch_args);
 
 private:
     void uniswaporder(account_name owner, extended_asset quantity, extended_asset to, double price, account_name id, account_name rampay);
@@ -328,13 +484,20 @@ public:
 
 public:
     void billrec(account_name owner, extended_asset asset, uint64_t bill_id, uint8_t state);
-    void orderrec(account_name owner, account_name oppo, extended_asset sell, extended_asset buy, uint64_t bill_id, uint64_t order_id);
+    void orderrec(account_name owner, account_name oppo, extended_asset sell, extended_asset buy, extended_asset reserve, uint64_t bill_id, uint64_t order_id);
     void incentiverec(account_name owner, extended_asset inc, uint64_t bill_id, uint64_t order_id, uint8_t type);
     void orderclarec(account_name owner, extended_asset quantity, uint64_t bill_id, uint64_t order_id);
     void redeemrec(account_name owner, account_name miner, extended_asset asset);
+    void liqrec(account_name miner, extended_asset pst_asset, extended_asset dmc_asset);
     void makerliqrec(account_name miner, uint64_t bill_id, extended_asset sub_pst);
     void makercharec(account_name sender, account_name miner, extended_asset changed, MakerReceiptType type);
-    void ordercharec(uint64_t order_id, extended_asset storage, extended_asset lock, extended_asset settlement, time_point_sec exec_date, OrderReceiptType type);
+    void ordercharec(uint64_t order_id, extended_asset storage, extended_asset lock, extended_asset settlement, extended_asset challenge, time_point_sec exec_date, OrderReceiptType type);
+    void assetcharec(account_name owner, extended_asset changed, uint8_t type, uint64_t id);
+
+public:
+    void nftsymrec(uint64_t symbol_id, extended_symbol nft_symbol, std::string symbol_uri, nft_type type);
+    void nftrec(uint64_t symbol_id, uint64_t nft_id, std::string nft_uri, std::string nft_name, std::string extra_data, extended_asset quantity);
+    void nftaccrec(uint64_t symbol_id, uint64_t nft_id, name owner, extended_asset quantity);
 
 public:
     inline asset get_supply(symbol_type sym) const;
@@ -352,6 +515,9 @@ private:
     // void changestake(account_name owner, extended_asset asset, uint64_t primary);
     string uint32_to_string(uint32_t value);
     void trace_price_history(double price, uint64_t bill_id);
+
+    ChallengeState get_challenge_state(uint64_t order_id);
+    bool is_challenge_end(ChallengeState state);
 
 private:
     uint64_t get_dmc_config(name key, uint64_t default_value);
@@ -584,17 +750,39 @@ private:
         extended_asset lock_pledge;
         OrderState state;
         time_point_sec deliver_start_date;
-        time_point_sec latest_claim_date;
+        time_point_sec latest_settlement_date;
 
         uint64_t primary_key() const { return order_id; }
         uint64_t get_user() const { return user; }
         uint64_t get_miner() const { return miner; }
-        EOSLIB_SERIALIZE(dmc_order, (order_id)(user)(miner)(bill_id)(user_pledge)(miner_pledge)(price)(settlement_pledge)(lock_pledge)(state)(deliver_start_date)(latest_claim_date))
+        EOSLIB_SERIALIZE(dmc_order, (order_id)(user)(miner)(bill_id)(user_pledge)(miner_pledge)(price)(settlement_pledge)(lock_pledge)(state)(deliver_start_date)(latest_settlement_date))
     };
     typedef eosio::multi_index<N(dmcorder), dmc_order,
         indexed_by<N(user), const_mem_fun<dmc_order, uint64_t, &dmc_order::get_user>>,
         indexed_by<N(miner), const_mem_fun<dmc_order, uint64_t, &dmc_order::get_miner>>>
         dmc_orders;
+
+    // dmc 挑战表
+    struct dmc_challenge {
+        uint64_t order_id;
+        checksum256 pre_merkle_root;
+        uint64_t pre_data_block_count;
+        checksum256 merkle_root;
+        uint64_t data_block_count;
+        name merkle_submitter;
+        uint64_t data_id;
+        checksum256 hash_data;
+        uint64_t challenge_times;
+        std::string nonce;
+        ChallengeState state;
+        extended_asset user_lock;
+        extended_asset miner_pay;
+        time_point_sec challenge_date;
+
+        uint64_t primary_key() const { return order_id; }
+        EOSLIB_SERIALIZE(dmc_challenge, (order_id)(pre_merkle_root)(pre_data_block_count)(merkle_root)(data_block_count)(merkle_submitter)(data_id)(hash_data)(challenge_times)(nonce)(state)(user_lock)(miner_pay)(challenge_date))
+    };
+    typedef eosio::multi_index<N(dmchallenge), dmc_challenge> dmc_challenges;
 
     struct limited_partner {
         account_name owner;
@@ -652,6 +840,20 @@ private:
     };
     typedef eosio::multi_index<N(priceavg), price_avg> avg_table;
 
+    struct order_migration {
+        uint64_t current_id;
+        time_point_sec begin_date;
+        uint64_t primary_key() const { return 1; }
+        EOSLIB_SERIALIZE(order_migration, (current_id)(begin_date))
+    };
+    typedef eosio::multi_index<N(ordermiginfo), order_migration> order_migration_table;
+
+public:
+    void set_order_migration(uint64_t order_id, account_name payer);
+
+public:
+    void ordermig(account_name payer, uint32_t limit);
+
 private:
     inline static account_name get_foundation(account_name issuer)
     {
@@ -671,6 +873,12 @@ private:
     uint64_t calbonus(account_name owner, uint64_t primary, account_name ram_payer);
     double cal_makerd_pst(extended_asset dmc_asset);
     double cal_current_rate(extended_asset dmc_asset, account_name owner);
+
+private:
+    void change_order(dmc_order& order, const dmc_challenge& challenge, time_point_sec current, uint64_t claims_interval, name payer);
+    void update_order(dmc_order& order, const dmc_challenge& challenge, name payer);
+    void destory_pst(const dmc_order& info);
+    void claim_dmc_reward(const dmc_order& info, dmc_challenge& challenge, account_name payer);
 };
 
 asset token::get_supply(symbol_type sym) const

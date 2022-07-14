@@ -70,7 +70,7 @@ void token::extransfer(account_name from, account_name to, extended_asset quanti
 
     if (to == N(eosio.ramfee) || to == N(eosio.saving)) {
         INLINE_ACTION_SENDER(eosio::token, exretire)
-        (N(eosio.token), { { from, N(active) } }, { from, quantity, std::string("issue tokens for producer pay and savings") });
+        (N(eosio.token), { { from, N(active) } }, { from, quantity, std::string("exretire tokens for producer pay and savings") });
         return;
     }
 
@@ -110,8 +110,16 @@ void token::exretire(account_name from, extended_asset quantity, string memo)
 
     sub_stats(quantity);
 
-    if (quantity.get_extended_symbol() == pst_sym)
+    if (quantity.get_extended_symbol() == pst_sym) {
         change_pst(from, -quantity);
+        dmc_makers maker_tbl(_self, _self);
+        auto iter = maker_tbl.find(from);
+        if (iter != maker_tbl.end()) {
+            maker_tbl.modify(iter, 0, [&](auto& m) {
+                m.current_rate = cal_current_rate(iter->total_staked, from);
+            });
+        }
+    }
 }
 
 void token::exclose(account_name owner, extended_symbol symbol)
@@ -135,7 +143,7 @@ void token::sub_balance(account_name owner, extended_asset value)
     eosio_assert(from->balance.amount >= value.amount, "overdrawn balance when sub balance");
     eosio_assert(from->balance.symbol == value.symbol, "symbol precision mismatch");
 
-    from_iter.modify(from, owner, [&](auto& a) {
+    from_iter.modify(from, 0, [&](auto& a) {
         a.balance -= value;
     });
 }
@@ -171,12 +179,12 @@ void token::change_pst(account_name owner, extended_asset value)
             i.amount += value;
         });
     } else {
-        eosio_assert(value.amount >= 0, "cannot add negative pst"); // never happened
         st = pst_acnts.emplace(_self, [&](auto& i) {
             i.owner = owner;
             i.amount = value;
         });
     }
+    eosio_assert(st->amount.amount >= 0, "overdrawn balance when change PST");
 
     //  TODO: ADD GLOBAL SET
     action({ _self, N(active) }, N(eosio), N(settotalvote),

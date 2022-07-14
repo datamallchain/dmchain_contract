@@ -348,29 +348,36 @@
       "fields": [
         {"name": "sender","type": "name"},
         {"name": "order_id","type": "uint64"},
-        {"name": "merkle_root","type": "checksum256"}
+        {"name": "merkle_root","type": "checksum256"},
+        {"name": "data_block_count","type": "uint64"}
       ]
     },{
-      "name": "challenge",
+      "name": "arbitration",
       "base": "",
       "fields": [
         {"name": "sender","type": "name"},
         {"name": "order_id","type": "uint64"},
-        {"name": "data_id_str","type": "string"},
         {"name": "data","type": "bytes"},
-        {"name": "cut_merkle","type": "checksum_array[]"}
+        {"name": "cut_merkle","type": "checksum256[]"}
       ]
     },{
       "name": "dmc_challenge",
       "base": "",
       "fields": [
         {"name": "order_id","type": "uint64"},
+        {"name": "pre_merkle_root","type": "checksum256"},
+        {"name": "pre_data_block_count","type": "uint64"},
         {"name": "merkle_root","type": "checksum256"},
+        {"name": "data_block_count","type": "uint64"},
+        {"name": "merkle_submitter","type": "name"},
         {"name": "data_id","type": "uint64"},
         {"name": "hash_data","type": "checksum256"},
         {"name": "challenge_times","type": "uint64"},
         {"name": "nonce","type": "string"},
-        {"name": "state","type": "ChallengeState"}
+        {"name": "state","type": "ChallengeState"},
+        {"name": "user_lock","type": "extended_asset"},
+        {"name": "miner_pay","type": "extended_asset"},
+        {"name": "challenge_date","type": "time_point_sec"}
       ]
     },{          
       "name": "dmc_order",
@@ -386,11 +393,11 @@
         {"name": "settlement_pledge","type": "extended_asset"},
         {"name": "lock_pledge","type": "extended_asset"},
         {"name": "state","type": "OrderState"},
-        {"name": "create_date","type": "time_point_sec"},
-        {"name": "claim_date","type": "time_point_sec"}
+        {"name": "deliver_start_date","type": "time_point_sec"},
+        {"name": "latest_settlement_date","type": "time_point_sec"}
       ]
     },{
-      "name": "replyproof",
+      "name": "anschallenge",
       "base": "",
       "fields": [
         {"name": "sender","type": "name"},
@@ -398,14 +405,20 @@
         {"name": "reply_hash","type": "checksum256"}
       ]
     },{
-      "name": "submitproof",
+      "name": "paychallenge",
+      "base": "",
+      "fields": [
+        {"name": "sender","type": "name"},
+        {"name": "order_id","type": "uint64"}
+      ]
+    },{
+      "name": "reqchallenge",
       "base": "",
       "fields": [
         {"name": "sender","type": "name"},
         {"name": "order_id","type": "uint64"},
         {"name": "data_id","type": "uint64"},
-        {"name": "key","type": "public_key"},
-        {"name": "sign","type": "signature"},
+        {"name": "hash_data","type": "checksum256"},
         {"name": "nonce","type": "string"}
       ] 
     },{
@@ -416,6 +429,7 @@
         {"name": "miner","type": "account_name"},
         {"name": "bill_id","type": "uint64"},
         {"name": "asset","type": "extended_asset"},
+        {"name": "reserve","type": "extended_asset"},
         {"name": "memo","type": "string"}
       ]
     },{
@@ -454,6 +468,13 @@
         {"name": "sender","type": "account_name"},
         {"name": "order_id","type": "uint64"},
         {"name": "quantity","type": "extended_asset"}
+      ]
+    },{
+      "name": "updateorder",
+      "base": "",
+      "fields": [
+        {"name": "payer","type": "account_name"},
+        {"name": "order_id","type": "uint64"}
       ]
     },{
       "name": "dmc_maker",
@@ -512,6 +533,7 @@
         {"name": "oppo","type": "account_name"},
         {"name": "sell","type": "extended_asset"},
         {"name": "buy","type": "extended_asset"},
+        {"name": "reserve","type": "extended_asset"},
         {"name": "bill_id","type": "uint64"},
         {"name": "order_id","type": "uint64"}
       ]
@@ -551,12 +573,6 @@
         {"name": "total","type": "float64"},
         {"name": "count","type": "uint64"},
         {"name": "avg","type": "float64"}
-      ]
-    },{
-      "name": "clean",
-      "base": "",
-      "fields": [
-        {"name": "memo","type": "string"}
       ]
     },{
       "name": "burnbatch",
@@ -784,11 +800,175 @@
       ]
     },
     {
+      "name": "nftsymrec",
+      "base": "",
+      "fields": [
+        {
+          "name": "symbol_id",
+          "type": "uint64"
+        },
+        {
+          "name": "nft_symbol",
+          "type": "extended_symbol"
+        },
+        {
+          "name": "symbol_uri",
+          "type": "string"
+        },
+        {
+          "name":"type",
+          "type":"nft_type"
+        }
+      ]
+    },
+    {
+      "name": "nftrec",
+      "base": "",
+      "fields": [
+        {
+          "name": "symbol_id",
+          "type": "uint64"
+        },
+        {
+          "name": "nft_id",
+          "type": "uint64"
+        },
+        {
+          "name": "nft_uri",
+          "type": "string"
+        },
+        {
+          "name":"nft_name",
+          "type":"string"
+        },
+        {
+          "name":"extra_data",
+          "type":"string"
+        },
+        {
+          "name":"quantity",
+          "type":"extended_asset"
+        }
+      ]
+    },
+    {
+      "name": "nftaccrec",
+      "base": "",
+      "fields": [
+        {
+          "name": "symbol_id",
+          "type": "uint64"
+        },
+        {
+          "name": "nft_id",
+          "type": "uint64"
+        },
+        {
+          "name": "owner",
+          "type": "name"
+        },
+        {
+          "name":"quantity",
+          "type":"extended_asset"
+        }
+      ]
+    },
+    {
       "name": "maker_pool",
       "base": "",
       "fields": [
         {"name": "owner","type": "account_name"},
         {"name": "weight","type": "float64"}
+      ]
+    },
+    {
+      "name": "redeemrec",
+      "base": "",
+      "fields": [
+        {"name": "owner","type": "account_name"},
+        {"name": "miner","type": "account_name"},
+        {"name": "asset","type": "extended_asset"}
+      ]
+    },
+    {
+      "name": "liquidation",
+      "base": "",
+      "fields": [
+        {"name": "memo","type": "string"}
+      ]
+    },
+    {
+      "name": "liqrec",
+      "base": "",
+      "fields": [
+        {"name": "miner","type": "account_name"},
+        {"name": "pst_asset","type": "extended_asset"},
+        {"name": "dmc_asset","type": "extended_asset"}
+      ]
+    },
+    {
+      "name": "makerliqrec",
+      "base": "",
+      "fields": [
+        {"name": "miner","type": "account_name"},
+        {"name": "bill_id","type": "uint64"},
+        {"name": "sub_pst","type": "extended_asset"}
+      ]
+    },
+    {
+      "name": "makercharec",
+      "base": "",
+      "fields": [
+        {"name": "sender","type": "account_name"},
+        {"name": "miner","type": "account_name"},
+        {"name": "changed","type": "extended_asset"},
+        {"name": "type","type": "uint8"}
+      ]
+    },
+    {
+      "name": "ordercharec",
+      "base": "",
+      "fields": [
+        {"name": "order_id","type": "uint64"},
+        {"name": "storage","type": "extended_asset"},
+        {"name": "lock","type": "extended_asset"},
+        {"name": "settlement","type": "extended_asset"},
+        {"name": "challenge","type": "extended_asset"},
+        {"name": "exec_date","type": "time_point_sec"},
+        {"name": "type","type": "uint8"}
+      ]
+    },
+    {
+      "name": "assetcharec",
+      "base": "",
+      "fields": [
+        {"name": "owner","type": "name"},
+        {"name": "changed","type": "extended_asset"},
+        {"name": "type","type": "uint8"},
+        {"name": "id","type": "uint64"}
+      ]
+    },
+    {
+      "name": "cleanpst",
+      "base": "",
+      "fields": [
+        {"name": "memo","type": "string"}
+      ]
+    },
+    {
+      "name": "order_migration",
+      "base": "",
+      "fields": [
+        {"name": "current_id","type": "uint64"},
+        {"name": "begin_date","type": "time_point_sec"}
+      ]
+    },
+    {
+      "name": "ordermig",
+      "base": "",
+      "fields": [
+        {"name": "payer","type": "name"},
+        {"name": "limit","type": "uint32"}
       ]
     }
   ],
@@ -909,12 +1089,64 @@
       "type": "allocation",
       "ricardian_contract": ""
     },{
+      "name": "addmerkle",
+      "type": "addmerkle",
+      "ricardian_contract": ""
+    },{
+      "name": "anschallenge",
+      "type": "anschallenge",
+      "ricardian_contract": ""
+    },{
+      "name": "paychallenge",
+      "type": "paychallenge",
+      "ricardian_contract": ""
+    },{
+      "name": "arbitration",
+      "type": "arbitration",
+      "ricardian_contract": ""
+    },{
+      "name": "reqchallenge",
+      "type": "reqchallenge",
+      "ricardian_contract": ""
+    },{
       "name": "order",
       "type": "order",
       "ricardian_contract": ""
     },{
       "name": "setdmcconfig",
       "type": "setdmcconfig",
+      "ricardian_contract": ""
+    },{
+      "name": "claimorder",
+      "type": "claimorder",
+      "ricardian_contract": ""
+    },{
+      "name": "addordasset",
+      "type": "addordasset",
+      "ricardian_contract": ""
+    },{
+      "name": "subordasset",
+      "type": "subordasset",
+      "ricardian_contract": ""
+    },{
+      "name": "updateorder",
+      "type": "updateorder",
+      "ricardian_contract": ""
+    },{
+      "name": "increase",
+      "type": "increase",
+      "ricardian_contract": ""
+    },{
+      "name": "redemption",
+      "type": "redemption",
+      "ricardian_contract": ""
+    },{
+      "name": "mint",
+      "type": "mint",
+      "ricardian_contract": ""
+    },{
+      "name": "setmakerrate",
+      "type": "setmakerrate",
       "ricardian_contract": ""
     },{
       "name": "billrec",
@@ -931,6 +1163,82 @@
     },{
       "name": "orderclarec",
       "type": "orderclarec",
+      "ricardian_contract": ""
+    },{
+      "name": "burnbatch",
+      "type": "burnbatch",
+      "ricardian_contract": ""
+    },{
+        "name": "nftburn",
+        "type": "nftburn",
+        "ricardian_contract": ""
+    },{
+        "name": "nftcreate",
+        "type": "nftcreate",
+        "ricardian_contract": ""
+    },{
+        "name": "nftcreatesym",
+        "type": "nftcreatesym",
+        "ricardian_contract": ""
+    },{
+        "name": "nftissue",
+        "type": "nftissue",
+        "ricardian_contract": ""
+    },{
+        "name": "nfttransfer",
+        "type": "nfttransfer",
+        "ricardian_contract": ""
+    },{
+        "name": "nfttransferb",
+        "type": "nfttransferb",
+        "ricardian_contract": ""
+    },{
+      "name": "redeemrec",
+      "type": "redeemrec",
+      "ricardian_contract": ""
+    },{
+        "name": "nftsymrec",
+        "type": "nftsymrec",
+        "ricardian_contract": ""
+    },{
+        "name": "nftrec",
+        "type": "nftrec",
+        "ricardian_contract": ""
+    },{
+        "name": "nftaccrec",
+        "type": "nftaccrec",
+        "ricardian_contract": ""
+    },{
+        "name": "liquidation",
+        "type": "liquidation",
+        "ricardian_contract": ""
+    },{
+        "name": "liqrec",
+        "type": "liqrec",
+        "ricardian_contract": ""
+    },{
+       "name": "makerliqrec",
+       "type": "makerliqrec",
+      "ricardian_contract": ""
+    },{
+       "name": "makercharec",
+       "type": "makercharec",
+      "ricardian_contract": ""
+    },{
+       "name": "ordercharec",
+       "type": "ordercharec",
+      "ricardian_contract": ""
+    },{
+       "name": "cleanpst",
+       "type": "cleanpst",
+      "ricardian_contract": ""
+    },{
+       "name": "assetcharec",
+       "type": "assetcharec",
+      "ricardian_contract": ""
+    },{
+       "name": "ordermig",
+       "type": "ordermig",
       "ricardian_contract": ""
     }
   ],
@@ -1041,6 +1349,12 @@
       "type": "maker_pool",
       "index_type": "i64",
       "key_names": ["owner"],
+      "key_types": ["uint64"]
+    },{
+      "name": "ordermiginfo",
+      "type": "order_migration",
+      "index_type": "i64",
+      "key_names": ["current_id"],
       "key_types": ["uint64"]
     }
   ],
