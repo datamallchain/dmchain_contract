@@ -21,6 +21,7 @@ static const name dmc_account = "dmc"_n;
 constexpr double static_weights = 10000.0;
 constexpr double uniswap_fee = 0.003;
 constexpr uint64_t uint64_max = ~uint64_t(0);
+constexpr uint32_t uint32_max = ~uint32_t(0);
 constexpr uint64_t minimum_token_precision = 0;
 constexpr double incentive_rate = 0.1;
 
@@ -34,10 +35,10 @@ static const extended_symbol dmc_sym = extended_symbol(symbol(symbol_code("DMC")
 constexpr uint64_t day_sec = 24 * 3600;
 constexpr uint64_t week_sec = 7 * day_sec;
 constexpr uint64_t default_dmc_claims_interval = week_sec;
-constexpr uint64_t default_order_service_epoch = 12 * week_sec;
+constexpr uint64_t default_order_service_epoch = 24 * week_sec;
 constexpr uint32_t identifying_code_mask = 0x3FFFFFF;
 constexpr uint64_t default_dmc_challenge_interval = day_sec;
-constexpr uint64_t default_phishing_interval = day_sec;
+constexpr uint64_t default_phishing_interval = 365 * day_sec;
 constexpr uint64_t default_initial_price = 10;
 constexpr uint64_t default_id_start = 1;
 constexpr uint64_t default_max_price_distance = 7;
@@ -300,7 +301,7 @@ private:
     extended_asset get_asset_by_amount(T amount, extended_symbol symbol);
 
     void uniswapdeal(name owner, extended_asset& market_from, extended_asset& market_to, extended_asset from, extended_asset to_sym, uint64_t primary, double price, name rampay);
-    
+
     extended_asset exchange_from_uniswap(extended_asset add_balance);
 
     extended_asset get_dmc_by_vrsi(extended_asset rsi_quantity);
@@ -308,7 +309,7 @@ private:
     extended_asset allocation_abo(time_point_sec now_time);
 
     extended_asset allocation_penalty(time_point_sec now_time);
-    
+
     void increase_penalty(extended_asset quantity);
 
 public:
@@ -324,7 +325,7 @@ public:
     ACTION liqrec(name miner, extended_asset pst_asset, extended_asset dmc_asset);
     
     ACTION billliqrec(name miner, uint64_t bill_id, extended_asset sub_pst);
-    
+
     ACTION currliqrec(name miner, extended_asset sub_pst);
 
 public:

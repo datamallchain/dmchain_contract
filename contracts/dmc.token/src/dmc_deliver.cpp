@@ -231,8 +231,11 @@ extended_asset token::distribute_lp_pool(uint64_t order_id, std::vector<asset_ty
     dmc_maker_pool dmc_pool(get_self(), miner.value);
     auto total_add = extended_asset(0, pledge.get_extended_symbol());
 
-    auto iter_rend = snapshot_iter->lps.rend() - 1;
-    for (auto iter = snapshot_iter->lps.rbegin();  iter != iter_rend; iter++) {
+    auto iter_end = snapshot_iter->lps.end();
+    for (auto iter = snapshot_iter->lps.begin();  iter != iter_end; iter++) {
+        if (iter->owner == miner) {
+            continue;
+        }
         auto owner_pledge = extended_asset(std::floor(iter->ratio * pledge.quantity.amount), pledge.get_extended_symbol());
         auto pool_iter = dmc_pool.find(iter->owner.value);
         if (pool_iter != dmc_pool.end()) {
@@ -250,18 +253,18 @@ extended_asset token::distribute_lp_pool(uint64_t order_id, std::vector<asset_ty
         total_add += owner_pledge;
     }
     auto owner_pledge = pledge - total_add;
-    auto pool_iter = dmc_pool.find(iter_rend->owner.value);
+    auto pool_iter = dmc_pool.find(miner.value);
     if (pool_iter != dmc_pool.end()) {
         double owner_weight = (double)owner_pledge.quantity.amount / maker_iter->total_staked.quantity.amount * maker_iter->total_weight;
         dmc_pool.modify(pool_iter, payer, [&](auto& p) {
             p.weight = p.weight + owner_weight;
         });
         pool_info.emplace_back(*pool_iter);
-        distribute_info.push_back({iter_rend->owner, owner_pledge, MakerDistributePool});
+        distribute_info.push_back({miner, owner_pledge, MakerDistributePool});
     } else {
-        add_balance(iter_rend->owner, owner_pledge, payer);
+        add_balance(miner, owner_pledge, payer);
         sub_pledge += owner_pledge;
-        distribute_info.push_back({iter_rend->owner, owner_pledge, MakerDistributeAccount});
+        distribute_info.push_back({miner, owner_pledge, MakerDistributeAccount});
     }
 
     extended_asset new_total = maker_iter->total_staked + (pledge - sub_pledge);

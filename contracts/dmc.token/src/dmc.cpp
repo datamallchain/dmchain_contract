@@ -433,7 +433,7 @@ double token::cal_current_rate(extended_asset dmc_asset, name owner, double real
 {
     pststats pst_acnts(get_self(), get_self().value);
     // double r = 5 * real_m * get_avg_price();
-    double r = uint64_max;
+    double r = uint32_max;
     auto st = pst_acnts.find(owner.value);
     if (st != pst_acnts.end() && st->amount.quantity.amount != 0) {
         r = (double)get_real_asset(dmc_asset) / st->amount.quantity.amount;
