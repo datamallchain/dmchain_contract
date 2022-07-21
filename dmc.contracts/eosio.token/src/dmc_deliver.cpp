@@ -287,20 +287,4 @@ void token::ordermig(account_name payer, uint32_t limit)
     set_order_migration(order_info.order_id, payer);
 }
 
-void token::set_order_migration(uint64_t order_id, account_name payer)
-{
-    order_migration_table order_migration_tbl(_self, _self);
-    if (order_migration_tbl.begin() == order_migration_tbl.end()) {
-        order_migration_tbl.emplace(payer, [&](auto& o) {
-            o.current_id = order_id;
-            o.begin_date = time_point_sec(now());
-        });
-    } else {
-        auto order_iter = order_migration_tbl.begin();
-        order_migration_tbl.modify(order_iter, payer, [&](auto& o) {
-            o.current_id = order_id;
-        });
-    }
-}
-
 }

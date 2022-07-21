@@ -56,6 +56,7 @@ void token::order(account_name owner, account_name miner, uint64_t bill_id, exte
 {
     require_auth(owner);
     eosio_assert(memo.size() <= 256, "memo has more than 256 bytes");
+    eosio_assert(owner != miner, "owner and user are same person");
     eosio_assert(asset.get_extended_symbol() == pst_sym, "only proof of service token can be ordered");
     eosio_assert(asset.amount > 0, "must order a positive amount");
     eosio_assert(reserve.amount >= 0, "reserve amount must >= 0");
@@ -101,11 +102,29 @@ void token::order(account_name owner, account_name miner, uint64_t bill_id, exte
         o.price = user_to_pay;
         o.state = OrderStateWaiting;
         o.deliver_start_date = time_point_sec();
-        o.latest_claim_date = time_point_sec();
+        o.latest_settlement_date = time_point_sec();
     });
 
+    dmc_challenges challenge_tbl(_self, _self);
+    challenge_tbl.emplace(owner, [&](auto& c) {
+        c.order_id = order_id;
+        c.pre_merkle_root = checksum256();
+        c.pre_data_block_count = 0;
+        c.merkle_submitter = name { _self };
+        c.challenge_times = 0;
+        c.state = ChallengePrepare;
+        c.user_lock = extended_asset(0, dmc_sym);
+        c.miner_pay = extended_asset(0, dmc_sym);
+    });
+
+    if (reserve.amount > 0) {
+        extended_asset zero_dmc = extended_asset(0, dmc_sym);
+        SEND_INLINE_ACTION(*this, ordercharec, { _self, N(active) },
+            { order_id, reserve, zero_dmc, zero_dmc, zero_dmc, time_point_sec(now()), OrderReceiptUser });
+    }
+
     trace_price_history(price, bill_id);
-    SEND_INLINE_ACTION(*this, orderrec, { _self, N(active) }, { owner, miner, user_to_pay, asset, bill_id, order_id });
+    SEND_INLINE_ACTION(*this, orderrec, { _self, N(active) }, { owner, miner, user_to_pay, asset, reserve, bill_id, order_id });
 }
 
 void token::increase(account_name owner, extended_asset asset, account_name miner)
@@ -215,7 +234,7 @@ void token::redemption(account_name owner, double rate, account_name miner)
     if (miner == owner) {
         eosio_assert(r >= benchmark_stake_rate, "current stake rate less than benchmark stake rate, redemption fails");
         auto miner_iter = dmc_pool.find(miner);
-        eosio_assert(miner_iter != dmc_pool.end(), ""); // never happened
+        eosio_assert(miner_iter != dmc_pool.end(), "miner can not destroy maker");
         eosio_assert(miner_iter->weight / total_weight >= iter->miner_rate, "below the minimum rate");
     }
 
@@ -247,6 +266,7 @@ void token::mint(account_name owner, extended_asset asset)
     dmc_makers maker_tbl(_self, _self);
     const auto& iter = maker_tbl.get(owner, "no such pst maker");
 
+    //! refactor
     double makerd_pst = cal_makerd_pst(iter.total_staked);
     extended_asset added_asset = asset;
     pststats pst_acnts(_self, _self);
@@ -278,7 +298,7 @@ void token::setmakerrate(account_name owner, double rate)
 
     dmc_maker_pool dmc_pool(_self, owner);
     auto miner_iter = dmc_pool.find(owner);
-    eosio_assert(miner_iter != dmc_pool.end(), ""); // never happened
+    eosio_assert(miner_iter != dmc_pool.end(), "miner can not destroy maker"); // never happened
     eosio_assert(miner_iter->weight / iter.total_weight >= rate, "rate does not meet limits");
 
     maker_tbl.modify(iter, 0, [&](auto& s) {
@@ -304,6 +324,93 @@ double token::cal_current_rate(extended_asset dmc_asset, account_name owner)
         r = uint64_max;
     }
     return r;
+}
+
+void token::liquidation(string memo)
+{
+    require_auth(eos_account);
+    dmc_makers maker_tbl(_self, _self);
+    auto maker_idx = maker_tbl.get_index<N(byrate)>();
+
+    double n = get_dmc_rate(name { N(liqrate) }, default_liquidation_stake_rate);
+    double m = get_dmc_rate(name { N(bmrate) }, default_benchmark_stake_rate);
+    pststats pst_acnts(_self, _self);
+    constexpr uint64_t required_size = 20;
+    std::vector<std::tuple<account_name /* miner */, extended_asset /* pst_asset */, extended_asset /* dmc_asset */>> liquidation_required;
+    liquidation_required.reserve(required_size);
+    for (auto maker_it = maker_idx.cbegin(); maker_it != maker_idx.cend() && maker_it->current_rate < n && liquidation_required.size() < required_size; maker_it++) {
+        account_name owner = maker_it->miner;
+        double r1 = maker_it->current_rate;
+        auto pst_it = pst_acnts.find(owner);
+
+        double sub_pst = (double)(1 - r1 / m) * get_real_asset(pst_it->amount);
+        extended_asset liq_pst_asset_leftover = get_asset_by_amount<double, std::ceil>(sub_pst, pst_sym);
+        auto origin_liq_pst_asset = liq_pst_asset_leftover;
+
+        accounts acnts(_self, owner);
+        auto account_idx = acnts.get_index<N(byextendedasset)>();
+        auto account_it = account_idx.find(account::key(pst_sym));
+        if (account_it != account_idx.end()) {
+            extended_asset pst_sub = extended_asset(std::min(liq_pst_asset_leftover.amount, account_it->balance.amount), pst_sym);
+
+            sub_balance(owner, pst_sub);
+            liq_pst_asset_leftover.amount = std::max((liq_pst_asset_leftover - pst_sub).amount, 0ll);
+        }
+
+        bill_stats sst(_self, owner);
+        for (auto bit = sst.begin(); bit != sst.end() && liq_pst_asset_leftover.amount > 0;) {
+            extended_asset sub_pst;
+            if (bit->unmatched <= liq_pst_asset_leftover) {
+                sub_pst = bit->unmatched;
+                liq_pst_asset_leftover -= bit->unmatched;
+            } else {
+                sub_pst = liq_pst_asset_leftover;
+                liq_pst_asset_leftover.amount = 0;
+            }
+
+            account_name miner = bit->owner;
+            uint64_t bill_id = bit->bill_id;
+            uint64_t now_time_t = calbonus(miner, bill_id, _self);
+
+            sst.modify(bit, 0, [&](auto& r) {
+                r.unmatched -= sub_pst;
+                r.updated_at = time_point_sec(now_time_t);
+            });
+
+            if (bit->unmatched.amount == 0)
+                bit = sst.erase(bit);
+            else
+                bit++;
+
+            SEND_INLINE_ACTION(*this, makerliqrec, { _self, N(active) }, { miner, bill_id, sub_pst });
+        }
+        extended_asset sub_pst_asset = origin_liq_pst_asset - liq_pst_asset_leftover;
+        double penalty_dmc = (double)(1 - r1 / m) * get_real_asset(maker_it->total_staked) * get_dmc_config(name { N(penaltyrate) }, default_penalty_rate) / 100.0;
+        extended_asset penalty_dmc_asset = get_asset_by_amount<double, std::ceil>(penalty_dmc, dmc_sym);
+        if (sub_pst_asset.amount != 0 && penalty_dmc_asset.amount != 0) {
+            liquidation_required.emplace_back(std::make_tuple(owner, sub_pst_asset, penalty_dmc_asset));
+        }
+    }
+
+    for (const auto liq : liquidation_required) {
+        account_name miner;
+        extended_asset pst;
+        extended_asset dmc;
+        std::tie(miner, pst, dmc) = liq;
+        auto pst_it = pst_acnts.find(miner);
+        change_pst(miner, -pst);
+        sub_stats(pst);
+        auto iter = maker_tbl.find(miner);
+        extended_asset new_staked = iter->total_staked - dmc;
+        double new_rate = cal_current_rate(new_staked, miner);
+        maker_tbl.modify(iter, 0, [&](auto& s) {
+            s.total_staked = new_staked;
+            s.current_rate = new_rate;
+        });
+        SEND_INLINE_ACTION(*this, makercharec, { _self, N(active) }, { _self, miner, -dmc, MakerReceiptLiquidation });
+        add_balance(system_account, dmc, eos_account);
+        SEND_INLINE_ACTION(*this, liqrec, { _self, N(active) }, { miner, pst, dmc });
+    }
 }
 
 void token::getincentive(account_name owner, uint64_t bill_id)
@@ -531,5 +638,42 @@ void token::trace_price_history(double price, uint64_t bill_id)
         a.count += 1;
         a.avg = (double)a.total / a.count;
     });
+}
+
+void token::cleanpst(string memo)
+{
+    pststats pst_acnts(_self, _self);
+    std::vector<std::tuple<account_name /* owner */, extended_asset /* pst_asset */>> clean_required;
+
+    for (auto it = pst_acnts.begin(); it != pst_acnts.end(); ++it) {
+        auto miner = it->owner;
+        dmc_makers maker_tbl(_self, _self);
+        auto iter = maker_tbl.find(miner);
+        if (iter == maker_tbl.end()) {
+            extended_asset pst;
+            accounts acnts(_self, miner);
+            auto account_idx = acnts.get_index<N(byextendedasset)>();
+            auto account_it = account_idx.find(account::key(pst_sym));
+            if (account_it != account_idx.end()) {
+                sub_balance(miner, account_it->balance);
+                pst = account_it->balance;
+            }
+            bill_stats sst(_self, miner);
+            for (auto bit = sst.begin(); bit != sst.end();) {
+                pst += bit->unmatched;
+                bit = sst.erase(bit);
+            }
+            clean_required.emplace_back(std::make_tuple(it->owner, pst));
+        }
+    }
+
+    for (const auto cle : clean_required) {
+        account_name owner;
+        extended_asset pst;
+        std::tie(owner, pst) = cle;
+        auto pst_it = pst_acnts.find(owner);
+        change_pst(owner, -pst);
+        sub_stats(pst);
+    }
 }
 } // namespace eosio

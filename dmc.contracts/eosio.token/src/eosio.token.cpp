@@ -39,6 +39,20 @@ EOSIO_ABI(eosio::token,
     //
     (billrec)(orderrec)(incentiverec)(orderclarec)
     //
+    (increase)(redemption)(mint)(setmakerrate)
+    //
+    (addmerkle)(reqchallenge)(anschallenge)(arbitration)(paychallenge)
+    //
+    (liquidation)(liqrec)(makerliqrec)
+    //
     (setdmcconfig)
-
-)
+    //
+    (claimorder)(addordasset)(subordasset)(updateorder)
+    //
+    (makercharec)(ordercharec)(assetcharec)(ordermig)
+    //
+    (nftcreatesym)(nftcreate)(nftissue)(nfttransfer)(nfttransferb)(nftburn)(burnbatch)
+    //
+    (nftsymrec)(nftrec)(nftaccrec)
+    //
+    (cleanpst))

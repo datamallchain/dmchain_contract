@@ -849,7 +849,21 @@ private:
     typedef eosio::multi_index<N(ordermiginfo), order_migration> order_migration_table;
 
 public:
-    void set_order_migration(uint64_t order_id, account_name payer);
+    void set_order_migration(uint64_t order_id, account_name payer)
+    {
+        order_migration_table order_migration_tbl(_self, _self);
+        if (order_migration_tbl.begin() == order_migration_tbl.end()) {
+            order_migration_tbl.emplace(payer, [&](auto& o) {
+                o.current_id = order_id;
+                o.begin_date = time_point_sec(now());
+            });
+        } else {
+            auto order_iter = order_migration_tbl.begin();
+            order_migration_tbl.modify(order_iter, payer, [&](auto& o) {
+                o.current_id = order_id;
+            });
+        }
+    }
 
 public:
     void ordermig(account_name payer, uint32_t limit);
