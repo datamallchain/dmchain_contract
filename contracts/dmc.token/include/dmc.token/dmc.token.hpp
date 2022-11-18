@@ -240,7 +240,7 @@ public:
     ACTION setreserve(name owner, extended_asset dmc_quantity, extended_asset rsi_quantity);
 
 public:
- 
+
     ACTION allocation(string memo);
 
     ACTION increase(name owner, extended_asset asset, name miner);
@@ -325,7 +325,7 @@ public:
     ACTION liqrec(name miner, extended_asset pst_asset, extended_asset dmc_asset);
     
     ACTION billliqrec(name miner, uint64_t bill_id, extended_asset sub_pst);
-    
+   
     ACTION currliqrec(name miner, extended_asset sub_pst);
 
 public:
@@ -736,6 +736,14 @@ public:
     ACTION assetrec(uint64_t order_id, std::vector<extended_asset> changed, name owner, AssetReceiptType rec_type);
     ACTION orderassrec(uint64_t order_id, std::vector<asset_type_args> changed, name owner, AccountType acc_type, time_point_sec exec_date);
 
+public: 
+    struct poolholder { 
+        name owner; 
+        double weight;
+    };
+    ACTION initmaker(name miner, double current_rate, double miner_rate, double total_weight, extended_asset total_staked, std::vector<poolholder> poolholder);
+    ACTION initprice(double avg_price, double total_price, std::vector<price_history> price_detail);
+
 private:
     inline static name get_foundation(name issuer)
     {
@@ -762,7 +770,6 @@ private:
     void update_order(dmc_order& order, const dmc_challenge& challenge, name payer);
     extended_asset distribute_lp_pool(uint64_t order_id, std::vector<asset_type_args> rewards, extended_asset challenge_pledge, name payer);
     void phishing_challenge();
-    void delete_maker_snapshot(uint64_t order_id);
 };
 
 asset token::get_supply(symbol_code sym) const

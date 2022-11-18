@@ -348,7 +348,6 @@ void token::paychallenge(name sender, uint64_t order_id)
     if (deleted) {
         order_tbl.erase(order_iter);
         challenge_tbl.erase(challenge_iter);
-        delete_maker_snapshot(order_id);
     } else {
         order_tbl.modify(order_iter, sender, [&](auto& o) {
             o = order_info;
