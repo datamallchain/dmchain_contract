@@ -6,7 +6,7 @@
 * telegram: https://t.me/DMC_Foundation
 * twitter: https://twitter.com/datamallcoin
 * medium: https://medium.com/@dmcfoundation
-
+* discord: https://discord.gg/dmcofficial
 
 
 # Building contracts
