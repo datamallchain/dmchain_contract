@@ -2,11 +2,11 @@
 
 ## Community
 
-* website: https://.io
-* telegram: https://t.me/IO
-* twitter: https://twitter.com/_io
-* medium: https://medium.com/@io
-* issue: https://github.com/io//issues
+* website: https://dmctech.io
+* telegram: https://t.me/DMC_Foundation
+* twitter: https://twitter.com/datamallcoin
+* medium: https://medium.com/@dmcfoundation
+
 
 
 # Building contracts
