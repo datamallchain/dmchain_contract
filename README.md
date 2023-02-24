@@ -11,7 +11,6 @@
 
 # Building contracts
 
-----------------------------------
 ## Download
 
 ```sh
