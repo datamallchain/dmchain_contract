@@ -67,6 +67,8 @@ constexpr uint64_t default_liquidation_stake_rate = 720;
 // 0.3
 constexpr uint64_t default_penalty_rate = 30;
 
+constexpr uint64_t default_bill_num_limit = 10;
+
 // for abo
 static const name abo_account = "dmfoundation"_n;
 
@@ -154,6 +156,19 @@ enum e_maker_distribute_type {
     MakerDistributePool = 2,
 };
 
+enum e_price_range_type {
+    RangeTypeBegin = 0,
+    TwentyPercent = 1,
+    ThirtyPercent = 2,
+    NoLimit = 3,
+    RangeTypeEnd,
+}; 
+
+enum e_allocation_type {
+    AllocationAbo = 1,
+    AllocationPenalty = 2,
+};
+
 typedef uint8_t OrderState;
 typedef uint8_t ChallengeState;
 
@@ -162,14 +177,13 @@ typedef uint8_t OrderReceiptType;
 typedef uint8_t AssetReceiptType;
 typedef uint8_t MakerReceiptType;
 typedef uint8_t MakerDistributeType;
+typedef uint8_t PriceRangeType;
+typedef uint8_t AllocationType;
 
 CONTRACT token : public contract {
 
 public:
-    token(name receiver, name code, datastream<const char*> ds)
-        : contract(receiver, code, ds)
-    {
-    }
+    token(name receiver, name code, datastream<const char*> ds);
 
     struct nft_batch_args {
         uint64_t nft_id;
@@ -235,8 +249,8 @@ public:
 
     ACTION setabostats(uint64_t stage, double user_rate, double foundation_rate, extended_asset total_release, extended_asset remaining_release, time_point_sec start_at, time_point_sec end_at, time_point_sec last_released_at);
 
-    ACTION order(name owner, name miner, uint64_t bill_id, extended_asset asset, extended_asset reserve, string memo, uint64_t epoch);
-
+    ACTION order(name owner, uint64_t bill_id, uint64_t benchmark_price, PriceRangeType price_range, uint64_t epoch, extended_asset asset, extended_asset reserve, string memo);
+    
     ACTION setreserve(name owner, extended_asset dmc_quantity, extended_asset rsi_quantity);
 
 public:
@@ -304,6 +318,11 @@ private:
 
     extended_asset exchange_from_uniswap(extended_asset add_balance);
 
+    /*! 
+     * 1. release the DMC from abo_stats, exchange a part of DMC to RSI, then exretire RSI.
+     * 2. release the DMC from DMC penalty pool, and ditto.
+     * 3. exchange RSI to DMC, and return the amount of DMC.
+    */
     extended_asset get_dmc_by_vrsi(extended_asset rsi_quantity);
 
     extended_asset allocation_abo(time_point_sec now_time);
@@ -317,27 +336,25 @@ public:
     ACTION traderecord(name owner, name oppo, extended_asset from, extended_asset to, extended_asset fee, uint64_t bid_id);
     ACTION pricerec(uint64_t old_price, uint64_t new_price);
     ACTION uniswapsnap(name owner, extended_asset quantity);
-
+    
 public:
     ACTION incentiverec(name owner, extended_asset inc, uint64_t bill_id);
     ACTION redeemrec(name owner, name miner, extended_asset asset);
-    
     ACTION liqrec(name miner, extended_asset pst_asset, extended_asset dmc_asset);
-    
     ACTION billliqrec(name miner, uint64_t bill_id, extended_asset sub_pst);
-   
     ACTION currliqrec(name miner, extended_asset sub_pst);
 
 public:
     ACTION nftsymrec(uint64_t symbol_id, extended_symbol nft_symbol, std::string symbol_uri, nft_type type);
     ACTION nftrec(uint64_t symbol_id, uint64_t nft_id, std::string nft_uri, std::string nft_name, std::string extra_data, extended_asset quantity);
     ACTION nftaccrec(uint64_t symbol_id, uint64_t nft_id, name owner, extended_asset quantity);
-
+    ACTION allocrec(extended_asset quantity, AllocationType type);
+    ACTION innerswaprec(extended_asset vrsi, extended_asset dmc);
 public:
     inline asset get_supply(symbol_code sym) const;
 
 private:
-    void change_pst(name owner, extended_asset value);
+    void change_pst(name owner, extended_asset value, bool lock = false);
     /**
      * when issue add it
      **/
@@ -346,8 +363,6 @@ private:
      * when retrie, sub it
      */
     void sub_stats(extended_asset quantity);
-
-    // void changestake(name owner, extended_asset asset, uint64_t primary);
 
     void trace_price_history(double price, uint64_t bill_id, uint64_t order_id);
 
@@ -358,7 +373,7 @@ private:
     uint64_t get_dmc_config(name key, uint64_t default_value);
     void set_dmc_config(name key, uint64_t value);
     double get_dmc_rate(uint64_t rate_value);
-    double get_avg_price();
+    double get_benchmark_price();
 
 public:
     TABLE nft_symbol_info {
@@ -523,11 +538,17 @@ public:
 
         uint64_t primary_key() const { return bill_id; }
         uint64_t get_lower() const { return price; }
-        uint64_t get_time() const { return uint64_t(updated_at.sec_since_epoch()); };
+        uint64_t get_owner() const { return owner.value; }
+        uint64_t get_ratio() const { return deposit_ratio; }
+        uint64_t get_unmatched() const { return unmatched.quantity.amount; }
+        uint64_t get_time() const { return uint64_t(updated_at.sec_since_epoch()); }
         uint64_t by_expire() const { return uint64_t(expire_on.sec_since_epoch()); }
     };
     typedef eosio::multi_index<"billrec"_n, bill_record,
         indexed_by<"bylowerprice"_n, const_mem_fun<bill_record, uint64_t, &bill_record::get_lower>>,
+        indexed_by<"byowner"_n, const_mem_fun<bill_record, uint64_t, &bill_record::get_owner>>,
+        indexed_by<"byratio"_n, const_mem_fun<bill_record, uint64_t, &bill_record::get_ratio>>,
+        indexed_by<"bycunmatched"_n, const_mem_fun<bill_record, uint64_t, &bill_record::get_unmatched>>,
         indexed_by<"bytime"_n, const_mem_fun<bill_record, uint64_t, &bill_record::get_time>>,
         indexed_by<"byexpire"_n, const_mem_fun<bill_record, uint64_t, &bill_record::by_expire>>>
         bill_stats;
@@ -694,14 +715,12 @@ public:
         indexed_by<"byorder"_n, const_mem_fun<price_history, uint64_t, &price_history::by_order_id>>>
         price_table;
 
-    TABLE price_avg {
-        uint64_t primary = 0;
-        double total = 0;
-        uint64_t count = 0;
-        double avg = 0;
-        uint64_t primary_key() const { return primary; }
+    TABLE bc_price {
+        std::vector<double> prices;
+        double benchmark_price;
+        uint64_t primary_key() const { return 0; }
     };
-    typedef eosio::multi_index<"priceavg"_n, price_avg> avg_table;
+    typedef eosio::multi_index<"bcprice"_n, bc_price> bc_price_table;
 
     struct maker_lp_pool {
         name owner;
@@ -736,14 +755,6 @@ public:
     ACTION assetrec(uint64_t order_id, std::vector<extended_asset> changed, name owner, AssetReceiptType rec_type);
     ACTION orderassrec(uint64_t order_id, std::vector<asset_type_args> changed, name owner, AccountType acc_type, time_point_sec exec_date);
 
-public: 
-    struct poolholder { 
-        name owner; 
-        double weight;
-    };
-    ACTION initmaker(name miner, double current_rate, double miner_rate, double total_weight, extended_asset total_staked, std::vector<poolholder> poolholder);
-    ACTION initprice(double avg_price, double total_price, std::vector<price_history> price_detail);
-
 private:
     inline static name get_foundation(name issuer)
     {
@@ -756,7 +767,8 @@ private:
     void lock_sub_balance(name owner, extended_asset value, time_point_sec lock_timestamp);
     void lock_sub_balance(name foundation, extended_asset quantity, bool recur = false);
     void lock_add_balance(name owner, extended_asset value, time_point_sec lock_timestamp, name ram_payer);
-
+    // convert balance to lock_balance
+    void exchange_balance_to_lockbalance(name owner, extended_asset value, time_point_sec lock_timestamp, name ram_payer);
     extended_asset get_balance(extended_asset quantity, name name);
 
 private:
@@ -770,6 +782,9 @@ private:
     void update_order(dmc_order& order, const dmc_challenge& challenge, name payer);
     extended_asset distribute_lp_pool(uint64_t order_id, std::vector<asset_type_args> rewards, extended_asset challenge_pledge, name payer);
     void phishing_challenge();
+    void delete_maker_snapshot(uint64_t order_id);
+    void delete_order_pst(const dmc_order& order);
+    void send_totalvote_to_system(name owner);
 };
 
 asset token::get_supply(symbol_code sym) const
