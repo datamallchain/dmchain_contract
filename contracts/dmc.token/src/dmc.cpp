@@ -7,13 +7,11 @@
 
 namespace eosio {
 
-void token::bill(name owner, extended_asset asset, double price, time_point_sec expire_on, uint64_t deposit_ratio, string memo)
-{
+void token::bill(name owner, extended_asset asset, double price, time_point_sec expire_on, uint64_t deposit_ratio, string memo) {
     require_auth(owner);
     check(memo.size() <= 256, "memo has more than 256 bytes");
     extended_symbol s_sym = asset.get_extended_symbol();
     check(s_sym == pst_sym, "only proof of service token can be billed");
-    // 1 << 14 = 16384 > 10000
     check(price >= 0.0001 && (price < (uint64_t(1) << 50)), "invalid price");
     check(asset.quantity.amount > 0, "must bill a positive amount");
     check(deposit_ratio >= 0 && deposit_ratio <= 99, "invalid deposit ratio");
@@ -21,10 +19,10 @@ void token::bill(name owner, extended_asset asset, double price, time_point_sec 
     time_point_sec now_time = time_point_sec(current_time_point());
     check(expire_on >= now_time + get_dmc_config("serverinter"_n, default_service_interval), "invalid service time");
 
-    uint64_t price_t = price * 10000;
+    uint64_t price_t = std::round(price * 10000);
 
     sub_balance(owner, asset);
-    bill_stats sst(get_self(), owner.value);
+    bill_stats sst(get_self(), get_self().value);
 
     uint64_t bill_id = get_dmc_config("billid"_n, default_id_start);
     bill_record bill_info = {
@@ -36,87 +34,151 @@ void token::bill(name owner, extended_asset asset, double price, time_point_sec 
         .created_at = now_time,
         .updated_at = now_time,
         .expire_on = expire_on,
-        .deposit_ratio = deposit_ratio
-    };
+        .deposit_ratio = deposit_ratio};
 
     set_dmc_config("billid"_n, bill_id + 1);
-    sst.emplace(owner, [&](auto &r) { 
-        r = bill_info; 
+    sst.emplace(owner, [&](auto& r) {
+        r = bill_info;
     });
-    SEND_INLINE_ACTION(*this, billsnap, { _self, "active"_n }, { bill_info });
+    SEND_INLINE_ACTION(*this, billsnap, {_self, "active"_n}, {bill_info});
 }
 
-void token::unbill(name owner, uint64_t bill_id, string memo)
-{
+void token::unbill(name owner, uint64_t bill_id, string memo) {
     require_auth(owner);
     check(memo.size() <= 256, "memo has more than 256 bytes");
-    bill_stats sst(get_self(), owner.value);
-    auto ust = sst.find(bill_id);
-    check(ust != sst.end(), "no such record");
-    extended_asset unmatched_asseet = ust->unmatched;
-    calbonus(owner, bill_id, owner);
-    sst.erase(ust);
-    add_balance(owner, unmatched_asseet, owner);
-    bill_record bill_info = {
-        .bill_id = bill_id,
-        .owner = owner,
-        .unmatched = unmatched_asseet
-    };
 
-    SEND_INLINE_ACTION(*this, billsnap, { _self, "active"_n }, { bill_info });
+    // TODO: delete it after
+    if (bill_id < get_dmc_config("olderbillid"_n, default_id_start)) {
+        bill_stats sst(get_self(), owner.value);
+        auto ust = sst.find(bill_id);
+        check(ust != sst.end(), "no such record");
+        extended_asset unmatched_asseet = ust->unmatched;
+        calbonus(owner, bill_id, owner);
+        sst.erase(ust);
+        add_balance(owner, unmatched_asseet, owner);
+        bill_record bill_info = {
+            .bill_id = bill_id,
+            .owner = owner,
+            .unmatched = unmatched_asseet};
+
+        SEND_INLINE_ACTION(*this, billsnap, {_self, "active"_n}, {bill_info});
+    } else {
+        bill_stats sst(get_self(), get_self().value);
+        auto ust = sst.find(bill_id);
+        check(ust != sst.end(), "no such record");
+        check(ust->owner == owner, "only owner can unbill");
+        extended_asset unmatched_asseet = ust->unmatched;
+        calbonus(owner, bill_id, owner);
+        sst.erase(ust);
+        add_balance(owner, unmatched_asseet, owner);
+        bill_record bill_info = {
+            .bill_id = bill_id,
+            .owner = owner,
+            .unmatched = unmatched_asseet};
+
+        SEND_INLINE_ACTION(*this, billsnap, {_self, "active"_n}, {bill_info});
+    }
 }
 
-void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset, extended_asset reserve, string memo, uint64_t epoch)
-{
+void token::order(name owner, uint64_t bill_id, uint64_t benchmark_price, PriceRangeType price_range, uint64_t epoch, extended_asset asset, extended_asset reserve, string memo) {
     require_auth(owner);
     check(memo.size() <= 256, "memo has more than 256 bytes");
-    check(owner != miner, "owner and user are same person");
-    check(asset.get_extended_symbol() == pst_sym, "only proof of service token can be ordered");
+    check(price_range > RangeTypeBegin && price_range < RangeTypeEnd, "invalid price range");
+    check(benchmark_price > 0, "invalid benchmark price");
+    check(epoch > 0, "invalid epoch");
+    check(asset.get_extended_symbol() == pst_sym, "only PST can be ordered");
     check(asset.quantity.amount > 0, "must order a positive amount");
+    check(reserve.get_extended_symbol() == dmc_sym, "only DMC can be reserved");
     check(reserve.quantity.amount >= 0, "reserve amount must >= 0");
-    require_recipient(owner);
-    require_recipient(miner);
 
-    bill_stats sst(get_self(), miner.value);
-    auto ust = sst.find(bill_id);
-    check(ust != sst.end(), "no such record");
-    check(ust->unmatched >= asset, "overdrawn balance");
+    double current_price = get_benchmark_price();
+    check(current_price <= (double)benchmark_price / 10000.0 * 1.05 && current_price >= (double)benchmark_price / 10000.0 * 0.95, "current price is not in benchmark price range");
+
+    uint64_t range = 0;
+    switch (price_range) {
+        case TwentyPercent:
+            range = 20;
+            break;
+        case ThirtyPercent:
+            range = 30;
+            break;
+        case NoLimit:
+            range = 100;
+            break;
+        default:
+            break;
+    }
+    uint64_t lower_bound_begin = benchmark_price * (100 - range) / 100;
+    uint64_t upper_bound_end = range == 100 ? uint64_max : benchmark_price * (100 + range) / 100;
+
+    bill_stats sst(get_self(), get_self().value);
+    auto price_idx = sst.get_index<"bylowerprice"_n>();
+    auto lower_bound_iter = price_idx.lower_bound(lower_bound_begin);
+    bool is_match = false;
+    uint64_t bill_number_limit = get_dmc_config("billnumlimit"_n, default_bill_num_limit);
+
+    // search ${bill_number_limit} records,
+    // NOTE: the actual situation may be more than ${bill_number_limit} entries, as entries with the same price count as one.
+    auto start_price = lower_bound_iter->price;
+    for (uint64_t count = 0; lower_bound_iter != price_idx.end() && count < bill_number_limit; lower_bound_iter++) {
+        if (lower_bound_iter->unmatched < asset) {
+            continue;
+        }
+        if (lower_bound_iter->price > upper_bound_end) {
+            break;
+        }
+        // only count the first record with the same price
+        if (lower_bound_iter->price != start_price) {
+            count++;
+            start_price = lower_bound_iter->price;
+        }
+        if (lower_bound_iter->bill_id == bill_id) {
+            is_match = true;
+            break;
+        }
+    }
+    check(is_match, "no matched bill");
+
+    name miner = lower_bound_iter->owner;
+    check(miner != owner, "can not order with self");
+    require_recipient(miner);
+    require_recipient(owner);
 
     uint64_t order_serivce_epoch = get_dmc_config("ordsrvepoch"_n, default_order_service_epoch);
     uint64_t claims_interval = get_dmc_config("claiminter"_n, default_dmc_claims_interval);
 
-    check(time_point_sec(current_time_point() + eosio::seconds(claims_interval * epoch)) <= ust->expire_on, "service has expired");
+    check(time_point_sec(current_time_point() + eosio::seconds(claims_interval * epoch)) <= lower_bound_iter->expire_on, "service has expired");
     check((claims_interval * epoch) >= order_serivce_epoch, "service not reach minimum deposit expire time");
 
-    double price = (double)ust->price / 10000;
+    double price = (double)lower_bound_iter->price / 10000;
     double dmc_amount = price * asset.quantity.amount;
-    extended_asset user_to_pay = get_asset_by_amount<double, std::ceil>(dmc_amount, dmc_sym);
+    extended_asset user_to_pay = get_asset_by_amount<double, std::round>(dmc_amount, dmc_sym);
 
     // deposit
-    extended_asset user_to_deposit = extended_asset(std::floor(user_to_pay.quantity.amount * ust->deposit_ratio), dmc_sym);
+    extended_asset user_to_deposit = extended_asset(std::floor(user_to_pay.quantity.amount * lower_bound_iter->deposit_ratio), dmc_sym);
     check(reserve >= user_to_pay + user_to_deposit, "reserve can't pay first time");
     sub_balance(owner, reserve);
 
     uint64_t now_time_t = calbonus(miner, bill_id, owner);
 
-    sst.modify(ust, get_self(), [&](auto& s) {
+    price_idx.modify(lower_bound_iter, get_self(), [&](auto& s) {
         s.unmatched -= asset;
         s.matched += asset;
         s.updated_at = time_point_sec(now_time_t);
     });
 
-    if(ust->unmatched.quantity.amount == 0) {
-        sst.erase(ust);
+    if (lower_bound_iter->unmatched.quantity.amount == 0) {
+        price_idx.erase(lower_bound_iter);
     }
 
     uint64_t order_id = get_dmc_config("orderid"_n, default_id_start);
-    
+
     dmc_makers maker_tbl(get_self(), get_self().value);
     auto maker_iter = maker_tbl.find(miner.value);
     check(maker_iter != maker_tbl.end(), "can't find maker pool");
 
     dmc_orders order_tbl(get_self(), get_self().value);
-    uint64_t r = std::floor(maker_iter->current_rate * 100.0/ get_avg_price());
+    uint64_t r = std::floor(maker_iter->current_rate * 100.0 / get_benchmark_price());
     // r = 5m' if r > 5m'
     if (r > maker_iter->benchmark_stake_rate * 5) {
         r = maker_iter->benchmark_stake_rate * 5;
@@ -143,7 +205,7 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
         .deposit = user_to_deposit,
         .epoch = epoch,
         .deposit_valid = time_point_sec(),
-        .cancel_date =  time_point_sec(),
+        .cancel_date = time_point_sec(),
     };
     order_tbl.emplace(owner, [&](auto& o) {
         o = order_info;
@@ -163,9 +225,8 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
     challenge_tbl.emplace(owner, [&](auto& c) {
         c = challenge_info;
     });
-    
-    sub_stats(asset);
-    change_pst(miner, -asset);
+
+    change_pst(miner, -asset, true);
     maker_tbl.modify(maker_iter, owner, [&](auto& m) {
         m.current_rate = cal_current_rate(m.total_staked - miner_lock_dmc, miner, m.get_real_m());
         m.total_staked -= miner_lock_dmc;
@@ -174,15 +235,14 @@ void token::order(name owner, name miner, uint64_t bill_id, extended_asset asset
     generate_maker_snapshot(order_info.order_id, bill_id, order_info.miner, owner, r, maker_iter->total_staked.quantity.amount == 0);
     trace_price_history(price, bill_id, order_info.order_id);
     set_dmc_config("orderid"_n, order_id + 1);
-    SEND_INLINE_ACTION(*this, orderrec, { _self, "active"_n }, { order_info, 1 });
-    SEND_INLINE_ACTION(*this, challengerec, { _self, "active"_n }, { challenge_info });
-    SEND_INLINE_ACTION(*this, billsnap, { _self, "active"_n }, { *ust });
-    SEND_INLINE_ACTION(*this, assetrec, { _self, "active"_n }, { order_info.order_id, { reserve }, order_info.user, AssetReceiptAddReserve});
-    SEND_INLINE_ACTION(*this, orderassrec, { _self, "active"_n }, { order_info.order_id, { {reserve, OrderReceiptAddReserve}, {-user_to_deposit, OrderReceiptDeposit}, {-user_to_pay, OrderReceiptRenew}}, order_info.user,  ACC_TYPE_USER, time_point_sec(current_time_point())});
+    SEND_INLINE_ACTION(*this, orderrec, {_self, "active"_n}, {order_info, 1});
+    SEND_INLINE_ACTION(*this, challengerec, {_self, "active"_n}, {challenge_info});
+    SEND_INLINE_ACTION(*this, billsnap, {_self, "active"_n}, {*lower_bound_iter});
+    SEND_INLINE_ACTION(*this, assetrec, {_self, "active"_n}, {order_info.order_id, {reserve}, order_info.user, AssetReceiptAddReserve});
+    SEND_INLINE_ACTION(*this, orderassrec, {_self, "active"_n}, {order_info.order_id, {{reserve, OrderReceiptAddReserve}, {-user_to_deposit, OrderReceiptDeposit}, {-user_to_pay, OrderReceiptRenew}}, order_info.user, ACC_TYPE_USER, time_point_sec(current_time_point())});
 }
 
-void token::increase(name owner, extended_asset asset, name miner)
-{
+void token::increase(name owner, extended_asset asset, name miner) {
     require_auth(owner);
     check(asset.get_extended_symbol() == dmc_sym, "only DMC can be staked");
     check(asset.quantity.amount > 0, "must increase a positive amount");
@@ -248,20 +308,19 @@ void token::increase(name owner, extended_asset asset, name miner)
         }
 
         auto miner_iter = dmc_pool.find(miner.value);
-        check(miner_iter != dmc_pool.end(), "miner can not destroy maker"); // never happened
+        check(miner_iter != dmc_pool.end(), "miner can not destroy maker");  // never happened
         check(miner_iter->weight / total_weight >= iter->miner_rate, "exceeding the maximum rate");
-        
+
         // The total amount staked by the lp must be greater than one percent of the stakable amount
         if (miner != owner) {
             check(p_iter->weight / (total_weight * (1 - iter->miner_rate)) >= 0.01, "the quantity of increase is insufficient.");
         }
     }
     SEND_INLINE_ACTION(*this, makerecord, {_self, "active"_n}, {*iter});
-    SEND_INLINE_ACTION(*this, makerpoolrec, {_self, "active"_n}, {miner, {*p_iter} });
+    SEND_INLINE_ACTION(*this, makerpoolrec, {_self, "active"_n}, {miner, {*p_iter}});
 }
 
-void token::redemption(name owner, double rate, name miner)
-{
+void token::redemption(name owner, double rate, name miner) {
     require_auth(owner);
 
     check(rate > 0 && rate <= 1, "invalid rate");
@@ -319,13 +378,19 @@ void token::redemption(name owner, double rate, name miner)
         check(miner_rate >= iter->miner_rate, "below the minimum rate");
     }
     check(rede_quantity.quantity.amount > 0, "dust attack detected");
-    lock_add_balance(owner, rede_quantity, time_point_sec(current_time_point() +  eosio::days(3)), owner);
-    SEND_INLINE_ACTION(*this, redeemrec, { get_self(), "active"_n }, { owner, miner, rede_quantity });
+    exchange_balance_to_lockbalance(owner, rede_quantity, time_point_sec(current_time_point() + eosio::days(3)), owner);
+    SEND_INLINE_ACTION(*this, redeemrec, {get_self(), "active"_n}, {owner, miner, rede_quantity});
     if (total_staked.quantity.amount == 0) {
         // for tracker
         maker_tbl.modify(iter, get_self(), [&](auto& m) {
             m.total_weight = 0;
         });
+
+        dmc_orders order_tbl(get_self(), get_self().value);
+        auto order_idx = order_tbl.get_index<"miner"_n>();
+        auto order_iter = order_idx.find(miner.value);
+        check(order_iter == order_idx.end(), "maker has orders");
+
         maker_tbl.erase(iter);
     } else {
         maker_tbl.modify(iter, get_self(), [&](auto& m) {
@@ -342,13 +407,12 @@ void token::redemption(name owner, double rate, name miner)
     if (rate != 1) {
         check(p_iter->weight / (iter->total_weight * (1 - iter->miner_rate)) >= 0.01, "The remaining weight is too low");
     }
-    
+
     SEND_INLINE_ACTION(*this, makerecord, {_self, "active"_n}, {*iter});
-    SEND_INLINE_ACTION(*this, makerpoolrec, {_self, "active"_n}, {miner, {*p_iter} });
+    SEND_INLINE_ACTION(*this, makerpoolrec, {_self, "active"_n}, {miner, {*p_iter}});
 }
 
-void token::mint(name owner, extended_asset asset)
-{
+void token::mint(name owner, extended_asset asset) {
     require_auth(owner);
     check(asset.quantity.amount > 0, "must mint a positive amount");
     check(asset.get_extended_symbol() == pst_sym, "only PST can be minted");
@@ -367,7 +431,6 @@ void token::mint(name owner, extended_asset asset)
 
     check(std::floor(makerd_pst) >= added_asset.quantity.amount, "insufficient funds to mint");
 
-    add_stats(asset);
     add_balance(owner, asset, owner);
     change_pst(owner, asset);
     double r = cal_current_rate(iter.total_staked, owner, iter.get_real_m());
@@ -380,8 +443,7 @@ void token::mint(name owner, extended_asset asset)
     SEND_INLINE_ACTION(*this, makerecord, {_self, "active"_n}, {iter});
 }
 
-void token::setmakerrate(name owner, double rate)
-{
+void token::setmakerrate(name owner, double rate) {
     require_auth(owner);
     check(rate >= 0.2 && rate <= 1, "invalid rate");
     dmc_makers maker_tbl(get_self(), get_self().value);
@@ -389,7 +451,7 @@ void token::setmakerrate(name owner, double rate)
 
     dmc_maker_pool dmc_pool(get_self(), owner.value);
     auto miner_iter = dmc_pool.find(owner.value);
-    check(miner_iter != dmc_pool.end(), "miner can not destroy maker"); // never happened
+    check(miner_iter != dmc_pool.end(), "miner can not destroy maker");  // never happened
     check(miner_iter->weight / iter.total_weight >= rate, "rate does not meet limits");
 
     maker_tbl.modify(iter, get_self(), [&](auto& s) {
@@ -399,14 +461,13 @@ void token::setmakerrate(name owner, double rate)
     SEND_INLINE_ACTION(*this, makerecord, {_self, "active"_n}, {iter});
 }
 
-void token::setmakerbstr(name owner, uint64_t self_benchmark_stake_rate)
-{
+void token::setmakerbstr(name owner, uint64_t self_benchmark_stake_rate) {
     require_auth(owner);
     dmc_makers maker_tbl(get_self(), get_self().value);
     const auto& iter = maker_tbl.get(owner.value, "no such record");
     dmc_maker_pool dmc_pool(get_self(), owner.value);
     auto miner_iter = dmc_pool.find(owner.value);
-    check(miner_iter != dmc_pool.end(), "miner can not destroy maker"); // never happened
+    check(miner_iter != dmc_pool.end(), "miner can not destroy maker");  // never happened
     time_point_sec now = time_point_sec(current_time_point());
 
     check(now >= iter.rate_updated_at + get_dmc_config("rateinter"_n, default_maker_change_rate_interval), "change rate interval too short");
@@ -415,10 +476,8 @@ void token::setmakerbstr(name owner, uint64_t self_benchmark_stake_rate)
     if (iter.rate_updated_at == time_point_sec(0)) {
         check(self_benchmark_stake_rate >= get_dmc_config("bmrate"_n, default_benchmark_stake_rate), "invalid benchmark_stake_rate");
     } else {
-        check(self_benchmark_stake_rate <= iter.benchmark_stake_rate * 1.1
-                && self_benchmark_stake_rate >= iter.benchmark_stake_rate * 0.9
-                && self_benchmark_stake_rate >= get_dmc_config("bmrate"_n, default_benchmark_stake_rate),
-            "invalid benchmark_stake_rate");
+        check(self_benchmark_stake_rate <= iter.benchmark_stake_rate * 1.1 && self_benchmark_stake_rate >= iter.benchmark_stake_rate * 0.9 && self_benchmark_stake_rate >= get_dmc_config("bmrate"_n, default_benchmark_stake_rate),
+              "invalid benchmark_stake_rate");
     }
 
     maker_tbl.modify(iter, get_self(), [&](auto& s) {
@@ -429,20 +488,17 @@ void token::setmakerbstr(name owner, uint64_t self_benchmark_stake_rate)
     SEND_INLINE_ACTION(*this, makerecord, {_self, "active"_n}, {iter});
 }
 
-double token::cal_current_rate(extended_asset dmc_asset, name owner, double real_m)
-{
+double token::cal_current_rate(extended_asset dmc_asset, name owner, double real_m) {
     pststats pst_acnts(get_self(), get_self().value);
-    // double r = 5 * real_m * get_avg_price();
     double r = uint32_max;
     auto st = pst_acnts.find(owner.value);
     if (st != pst_acnts.end() && st->amount.quantity.amount != 0) {
         r = (double)get_real_asset(dmc_asset) / st->amount.quantity.amount;
-    } 
+    }
     return r;
 }
 
-void token::liquidation(string memo)
-{
+void token::liquidation(string memo) {
     require_auth(dmc_account);
     check(memo.size() <= 256, "memo has more than 256 bytes");
     dmc_makers maker_tbl(get_self(), get_self().value);
@@ -466,44 +522,46 @@ void token::liquidation(string memo)
         accounts acnts(get_self(), owner.value);
         auto account_idx = acnts.get_index<"byextendedas"_n>();
         auto account_it = account_idx.find(account::key(pst_sym));
-        if (account_it != account_idx.end()) {
+        if (account_it != account_idx.end() && account_it->balance.quantity.amount > 0) {
             extended_asset pst_sub = extended_asset(std::min(liq_pst_asset_leftover.quantity.amount, account_it->balance.quantity.amount), pst_sym);
 
             sub_balance(owner, pst_sub);
-            SEND_INLINE_ACTION(*this, currliqrec, { _self, "active"_n }, { owner, pst_sub });
+            SEND_INLINE_ACTION(*this, currliqrec, {_self, "active"_n}, {owner, pst_sub});
             liq_pst_asset_leftover.quantity.amount = std::max((liq_pst_asset_leftover - pst_sub).quantity.amount, 0ll);
         }
 
-        bill_stats sst(get_self(), owner.value);
-        for (auto bit = sst.begin(); bit != sst.end() && liq_pst_asset_leftover.quantity.amount > 0;) {
+        bill_stats sst(get_self(), get_self().value);
+        auto bill_idx = sst.get_index<"byowner"_n>();
+        auto bill_it = bill_idx.lower_bound(owner.value);
+
+        for (; bill_it != bill_idx.end() && liq_pst_asset_leftover.quantity.amount > 0 && bill_it->owner == owner;) {
             extended_asset sub_pst;
-            if (bit->unmatched <= liq_pst_asset_leftover) {
-                sub_pst = bit->unmatched;
-                liq_pst_asset_leftover -= bit->unmatched;
+            if (bill_it->unmatched <= liq_pst_asset_leftover) {
+                sub_pst = bill_it->unmatched;
+                liq_pst_asset_leftover -= bill_it->unmatched;
             } else {
                 sub_pst = liq_pst_asset_leftover;
                 liq_pst_asset_leftover.quantity.amount = 0;
             }
 
-            name miner = bit->owner;
-            uint64_t bill_id = bit->bill_id;
-            uint64_t now_time_t = calbonus(miner, bill_id, _self);
+            uint64_t bill_id = bill_it->bill_id;
+            uint64_t now_time_t = calbonus(owner, bill_id, _self);
 
-            sst.modify(bit, get_self(), [&](auto& r) {
+            bill_idx.modify(bill_it, get_self(), [&](auto& r) {
                 r.unmatched -= sub_pst;
                 r.updated_at = time_point_sec(now_time_t);
                 // for tracker
-                if(r.unmatched.quantity.amount == 0)
+                if (r.unmatched.quantity.amount == 0)
                     r.price = 0;
             });
 
-            SEND_INLINE_ACTION(*this, billsnap, { _self, "active"_n }, { *bit });
-            if (bit->unmatched.quantity.amount == 0)
-                bit = sst.erase(bit);
+            SEND_INLINE_ACTION(*this, billsnap, {_self, "active"_n}, {*bill_it});
+            if (bill_it->unmatched.quantity.amount == 0)
+                bill_it = bill_idx.erase(bill_it);
             else
-                bit++;
+                bill_it++;
 
-            SEND_INLINE_ACTION(*this, billliqrec, { _self, "active"_n }, { miner, bill_id, sub_pst });
+            SEND_INLINE_ACTION(*this, billliqrec, {_self, "active"_n}, {owner, bill_id, sub_pst});
         }
         extended_asset sub_pst_asset = origin_liq_pst_asset - liq_pst_asset_leftover;
         double penalty_dmc = (double)(1 - r1 / m) * get_real_asset(maker_it->total_staked) * get_dmc_config("penaltyrate"_n, default_penalty_rate) / 100.0;
@@ -520,7 +578,6 @@ void token::liquidation(string memo)
         std::tie(miner, pst, dmc) = liq;
         auto pst_it = pst_acnts.find(miner.value);
         change_pst(miner, -pst);
-        sub_stats(pst);
         auto iter = maker_tbl.find(miner.value);
         extended_asset new_staked = iter->total_staked - dmc;
         double new_rate = cal_current_rate(new_staked, miner, iter->get_real_m());
@@ -530,67 +587,110 @@ void token::liquidation(string memo)
         });
         add_balance(system_account, dmc, dmc_account);
         SEND_INLINE_ACTION(*this, makerecord, {_self, "active"_n}, {*iter});
-        SEND_INLINE_ACTION(*this, liqrec, { _self, "active"_n }, { miner, pst, dmc });
+        SEND_INLINE_ACTION(*this, liqrec, {_self, "active"_n}, {miner, pst, dmc});
     }
 }
 
-void token::getincentive(name owner, uint64_t bill_id)
-{
+void token::getincentive(name owner, uint64_t bill_id) {
     require_auth(owner);
+    // TODO: delete it after
+    check(get_dmc_config("olderbillid"_n, default_id_start) <= bill_id, "this bill can only be unbilled");
     uint64_t now_time_t = calbonus(owner, bill_id, owner);
-    bill_stats sst(get_self(), owner.value);
+    bill_stats sst(get_self(), get_self().value);
+    // check bill_id in calbouns, so no need to check here
     auto ust = sst.find(bill_id);
+    check(ust != sst.end(), "no such record");
     sst.modify(ust, get_self(), [&](auto& s) {
         s.updated_at = time_point_sec(now_time_t);
     });
-    SEND_INLINE_ACTION(*this, billsnap, { _self, "active"_n }, { *ust });
+    SEND_INLINE_ACTION(*this, billsnap, {_self, "active"_n}, {*ust});
 }
 
-uint64_t token::calbonus(name owner, uint64_t bill_id, name ram_payer)
-{
-    bill_stats sst(get_self(), owner.value);
-    auto ust = sst.find(bill_id);
-    check(ust != sst.end(), "no such record");
+uint64_t token::calbonus(name owner, uint64_t bill_id, name ram_payer) {
+    // TODO: delete it after
+    if (bill_id < get_dmc_config("olderbillid"_n, default_id_start)) {
+        bill_stats sst(get_self(), owner.value);
+        auto ust = sst.find(bill_id);
+        check(ust != sst.end(), "no such record");
+        dmc_makers maker_tbl(get_self(), get_self().value);
+        const auto& iter = maker_tbl.get(owner.value, "no such pst maker");
 
-    dmc_makers maker_tbl(get_self(), get_self().value);
-    const auto& iter = maker_tbl.get(owner.value, "no such pst maker");
+        auto now_time = time_point_sec(current_time_point());
+        uint64_t now_time_t = now_time.sec_since_epoch();
+        uint64_t updated_at_t = ust->updated_at.sec_since_epoch();
+        uint64_t bill_dmc_claims_interval = get_dmc_config("billinter"_n, default_bill_dmc_claims_interval);
+        uint64_t max_dmc_claims_interval = ust->created_at.sec_since_epoch() + bill_dmc_claims_interval;
 
-    auto now_time = time_point_sec(current_time_point());
-    uint64_t now_time_t = now_time.sec_since_epoch();
-    uint64_t updated_at_t = ust->updated_at.sec_since_epoch();
-    uint64_t bill_dmc_claims_interval = get_dmc_config("billinter"_n, default_bill_dmc_claims_interval);
-    uint64_t max_dmc_claims_interval = ust->created_at.sec_since_epoch() + bill_dmc_claims_interval;
+        now_time_t = now_time_t >= max_dmc_claims_interval ? max_dmc_claims_interval : now_time_t;
 
-    now_time_t = now_time_t >= max_dmc_claims_interval ? max_dmc_claims_interval : now_time_t;
+        if (updated_at_t <= max_dmc_claims_interval) {
+            uint64_t duration = now_time_t - updated_at_t;
+            check(duration <= now_time_t, "subtractive overflow");  // never happened
 
-    if (updated_at_t <= max_dmc_claims_interval) {
-        uint64_t duration = now_time_t - updated_at_t;
-        check(duration <= now_time_t, "subtractive overflow"); // never happened
+            extended_asset quantity = get_asset_by_amount<double, std::floor>(
+                incentive_rate * duration * ust->unmatched.quantity.amount * get_dmc_config("bmrate"_n, default_benchmark_stake_rate) / 100.0 / bill_dmc_claims_interval,
+                rsi_sym);
 
-        extended_asset quantity = get_asset_by_amount<double, std::floor>(
-            incentive_rate * duration * ust->unmatched.quantity.amount * get_dmc_config("bmrate"_n, default_benchmark_stake_rate) / 100.0 / default_bill_dmc_claims_interval,
-            rsi_sym);
+            if (quantity.quantity.amount > 0) {
+                extended_asset dmc_quantity = get_dmc_by_vrsi(quantity);
 
-        if (quantity.quantity.amount > 0) {
-            extended_asset dmc_quantity = get_dmc_by_vrsi(quantity);
-
-            if (dmc_quantity.quantity.amount > 0) {
-                maker_tbl.modify(iter, ram_payer, [&](auto& s) {
-                    s.total_staked += dmc_quantity;
-                    s.current_rate = cal_current_rate(s.total_staked, owner, s.get_real_m());
-                });
-                SEND_INLINE_ACTION(*this, incentiverec, {_self, "active"_n}, {owner, dmc_quantity, bill_id});
+                if (dmc_quantity.quantity.amount > 0) {
+                    maker_tbl.modify(iter, ram_payer, [&](auto& s) {
+                        s.total_staked += dmc_quantity;
+                        s.current_rate = cal_current_rate(s.total_staked, owner, s.get_real_m());
+                    });
+                    SEND_INLINE_ACTION(*this, incentiverec, {_self, "active"_n}, {owner, dmc_quantity, bill_id});
+                }
+            } else {
+                // if quantity is 0, don't update updated_at
+                now_time_t = updated_at_t;
             }
-        } else {
-            // if quantity is 0, don't update updated_at
-            now_time_t = updated_at_t;
         }
+        return now_time_t;
+    } else {
+        bill_stats sst(get_self(), get_self().value);
+        auto ust = sst.find(bill_id);
+        check(ust != sst.end(), "no such record");
+        check(ust->owner == owner, "bill_id not belong to you");
+        dmc_makers maker_tbl(get_self(), get_self().value);
+        const auto& iter = maker_tbl.get(owner.value, "no such pst maker");
+
+        auto now_time = time_point_sec(current_time_point());
+        uint64_t now_time_t = now_time.sec_since_epoch();
+        uint64_t updated_at_t = ust->updated_at.sec_since_epoch();
+        uint64_t bill_dmc_claims_interval = get_dmc_config("billinter"_n, default_bill_dmc_claims_interval);
+        uint64_t max_dmc_claims_interval = ust->created_at.sec_since_epoch() + bill_dmc_claims_interval;
+
+        now_time_t = now_time_t >= max_dmc_claims_interval ? max_dmc_claims_interval : now_time_t;
+
+        if (updated_at_t <= max_dmc_claims_interval) {
+            uint64_t duration = now_time_t - updated_at_t;
+            check(duration <= now_time_t, "subtractive overflow");  // never happened
+
+            extended_asset quantity = get_asset_by_amount<double, std::floor>(
+                incentive_rate * duration * ust->unmatched.quantity.amount * get_dmc_config("bmrate"_n, default_benchmark_stake_rate) / 100.0 / bill_dmc_claims_interval,
+                rsi_sym);
+
+            if (quantity.quantity.amount > 0) {
+                extended_asset dmc_quantity = get_dmc_by_vrsi(quantity);
+
+                if (dmc_quantity.quantity.amount > 0) {
+                    maker_tbl.modify(iter, ram_payer, [&](auto& s) {
+                        s.total_staked += dmc_quantity;
+                        s.current_rate = cal_current_rate(s.total_staked, owner, s.get_real_m());
+                    });
+                    SEND_INLINE_ACTION(*this, incentiverec, {_self, "active"_n}, {owner, dmc_quantity, bill_id});
+                }
+            } else {
+                // if quantity is 0, don't update updated_at
+                now_time_t = updated_at_t;
+            }
+        }
+        return now_time_t;
     }
-    return now_time_t;
 }
 
-void token::setabostats(uint64_t stage, double user_rate, double foundation_rate, extended_asset total_release, extended_asset remaining_release, time_point_sec start_at, time_point_sec end_at, time_point_sec last_released_at)
-{
+void token::setabostats(uint64_t stage, double user_rate, double foundation_rate, extended_asset total_release, extended_asset remaining_release, time_point_sec start_at, time_point_sec end_at, time_point_sec last_released_at) {
     require_auth(dmc_account);
     check(stage >= 1 && stage <= 11, "invalid stage");
     check(user_rate <= 1 && user_rate >= 0, "invalid user_rate");
@@ -623,16 +723,15 @@ void token::setabostats(uint64_t stage, double user_rate, double foundation_rate
     }
 }
 
-void token::setdmcconfig(name key, uint64_t value)
-{
+void token::setdmcconfig(name key, uint64_t value) {
     require_auth(config_account);
     dmc_global dmc_global_tbl(get_self(), get_self().value);
     switch (key.value) {
-    case ("claiminter"_n).value:
-        check(value > 0, "invalid claims interval");
-        break;
-    default:
-        break;
+        case ("claiminter"_n).value:
+            check(value > 0, "invalid claims interval");
+            break;
+        default:
+            break;
     }
     auto config_itr = dmc_global_tbl.find(key.value);
     if (config_itr == dmc_global_tbl.end()) {
@@ -647,8 +746,7 @@ void token::setdmcconfig(name key, uint64_t value)
     }
 }
 
-uint64_t token::get_dmc_config(name key, uint64_t default_value)
-{
+uint64_t token::get_dmc_config(name key, uint64_t default_value) {
     dmc_global dmc_global_tbl(get_self(), get_self().value);
     auto dmc_global_iter = dmc_global_tbl.find(key.value);
     if (dmc_global_iter != dmc_global_tbl.end())
@@ -656,8 +754,7 @@ uint64_t token::get_dmc_config(name key, uint64_t default_value)
     return default_value;
 }
 
-void token::set_dmc_config(name key, uint64_t value)
-{
+void token::set_dmc_config(name key, uint64_t value) {
     dmc_global dmc_global_tbl(get_self(), get_self().value);
     auto config_itr = dmc_global_tbl.find(key.value);
 
@@ -673,57 +770,40 @@ void token::set_dmc_config(name key, uint64_t value)
     }
 }
 
-double token::get_avg_price() {
-    avg_table atb(get_self(), get_self().value);
-    auto aitr = atb.begin();
-    if (aitr == atb.end()) {
+double token::get_benchmark_price() {
+    bc_price_table bptb(get_self(), get_self().value);
+    auto bptb_iter = bptb.begin();
+    if (bptb_iter == bptb.end()) {
         auto avg_price = get_dmc_config("initalprice"_n, default_initial_price) / 100.0;
         return avg_price;
     }
-    return aitr->avg;
+    return bptb_iter->benchmark_price;
 }
 
-double token::get_dmc_rate(uint64_t rate_value)
-{
-    avg_table atb(get_self(), get_self().value);
-    auto aitr = atb.begin();
+double token::get_dmc_rate(uint64_t rate_value) {
     double value = rate_value / 100.0;
-    if (aitr == atb.end()) {
-        auto avg_price = get_dmc_config("initalprice"_n, default_initial_price) / 100.0;
-        return value * avg_price;
-    }
-    return value * aitr->avg;
+    return value * get_benchmark_price();
 }
 
-void token::trace_price_history(double price, uint64_t bill_id, uint64_t order_id)
-{
+void token::trace_price_history(double price, uint64_t bill_id, uint64_t order_id) {
     price_table ptb(get_self(), get_self().value);
     auto iter = ptb.get_index<"bytime"_n>();
     auto now_time = time_point_sec(current_time_point());
     const uint64_t max_price_distance = get_dmc_config("pricedist"_n, default_max_price_distance);
 
-    avg_table atb(get_self(), get_self().value);
-    auto aitr = atb.begin();
-    if (aitr == atb.end()) {
-        aitr = atb.emplace(_self, [&](auto& a) {
-            a.primary = 0;
-            a.total = 0;
-            a.count = 0;
-            a.avg = 0;
-        });
-    }
+    std::vector<double> prices;
+    prices.push_back(price);
 
     int times = 0;
     auto rawtime = now_time;
     for (auto it = iter.begin(); it != iter.end();) {
+        prices.push_back(it->price);
         if (rawtime.sec_since_epoch() / day_sec != it->created_at.sec_since_epoch() / day_sec) {
             times++;
         }
-        if (times > max_price_distance) {
-            atb.modify(aitr, _self, [&](auto& a) {
-                a.total -= it->price;
-                a.count -= 1;
-            });
+        if (times >= max_price_distance) {
+            // remove the oldest price
+            prices.pop_back();
             it = iter.erase(it);
         } else {
             rawtime = it->created_at;
@@ -739,15 +819,44 @@ void token::trace_price_history(double price, uint64_t bill_id, uint64_t order_i
         p.created_at = now_time;
     });
 
-    atb.modify(aitr, _self, [&](auto& a) {
-        a.total += price;
-        a.count += 1;
-        a.avg = (double)a.total / a.count;
+    // calculate median price
+    std::sort(prices.begin(), prices.end());
+    auto size = prices.size();
+    double bc_price = 0;
+    if (size % 2 == 0) {
+        bc_price = (prices[size / 2 - 1] + prices[size / 2]) / 2;
+    } else {
+        bc_price = prices[size / 2];
+    }
+    // convert to 4 decimal places
+    bc_price = std::floor(bc_price * 10000) / 10000.0;
+    bc_price_table bptb(get_self(), get_self().value);
+    auto bptb_iter = bptb.begin();
+    if (bptb_iter == bptb.end()) {
+        bptb_iter = bptb.emplace(_self, [&](auto& a) {
+            a.prices = prices;
+            a.benchmark_price = bc_price;
+        });
+    } else {
+        bptb.modify(bptb_iter, _self, [&](auto& a) {
+            a.prices = prices;
+            a.benchmark_price = bc_price;
+        });
+    }
+}
+
+void token::adjustprice(string memo) {
+    bc_price_table bptb(get_self(), get_self().value);
+    auto bptb_iter = bptb.begin();
+    if (bptb_iter == bptb.end()) {
+        return;
+    }
+    bptb.modify(bptb_iter, _self, [&](auto& a) {
+        a.benchmark_price = std::floor(a.benchmark_price * 10000) / 10000.0;
     });
 }
 
-void token::allocation(string memo)
-{
+void token::allocation(string memo) {
     require_auth(dmc_account);
     check(memo.size() <= 256, "memo has more than 256 bytes");
     abostats ast(get_self(), get_self().value);
@@ -768,8 +877,7 @@ void token::allocation(string memo)
             break;
         } else {
             auto duration_time = now_time.sec_since_epoch() - it->last_foundation_released_at.sec_since_epoch();
-            
-            if (duration_time / 86400 == 0) // 24 * 60 * 60
+            if (duration_time / 86400 == 0)  // 24 * 60 * 60
                 break;
             auto remaining_time = it->end_at.sec_since_epoch() - it->last_foundation_released_at.sec_since_epoch();
             double per = (double)duration_time / (double)remaining_time;
@@ -789,90 +897,7 @@ void token::allocation(string memo)
     }
 
     if (to_foundation.quantity.amount != 0) {
-        SEND_INLINE_ACTION(*this, issue, { dmc_account, "active"_n }, { system_account, to_foundation.quantity, "allocation to foundation" });
+        SEND_INLINE_ACTION(*this, issue, {dmc_account, "active"_n}, {system_account, to_foundation.quantity, "allocation to foundation"});
     }
-}
-
-// delete it after 
-// incloude initmaker and struct poolholder
-void token::initmaker(name miner, double current_rate, double miner_rate, double total_weight, extended_asset total_staked, std::vector<poolholder> poolholder) {
-    require_auth(system_account);
-    check(current_rate > 0, "current_rate must be greater than 0");
-    check(miner_rate > 0 && miner_rate <= 1, "miner_rate must be greater than 0");
-    check(total_weight > 0, "total_weight must be greater than 0");
-    check(total_staked.quantity.amount > 0, "total_staked must be greater than 0");
-    check(poolholder.size() > 0, "poolholder must be greater than 0");
-    check(total_staked.get_extended_symbol() == dmc_sym, "total_staked must be DMC symbol");
-
-    dmc_makers maker_tbl(get_self(), get_self().value);
-    auto iter = maker_tbl.find(miner.value);
-    dmc_maker_pool dmc_pool(get_self(), miner.value);
-    auto p_iter = dmc_pool.find(miner.value);
-    uint64_t benchmark_stake_rate = get_dmc_config("bmrate"_n, default_benchmark_stake_rate);
-    
-    // because of marker, we need send makerrecord first
-    if (iter == maker_tbl.end()) {
-        add_stats(total_staked);
-        iter = maker_tbl.emplace(system_account, [&](auto& m) {
-            m.miner = miner;
-            m.current_rate = current_rate;
-            m.miner_rate = miner_rate;
-            m.total_weight = total_weight;
-            m.total_staked = total_staked;
-            m.benchmark_stake_rate = benchmark_stake_rate;
-        });
-        SEND_INLINE_ACTION(*this, makerecord, {_self, "active"_n}, {*iter});
-        for (auto& p : poolholder) {
-            p_iter = dmc_pool.emplace(system_account, [&](auto& x) {
-                x.owner = p.owner;
-                x.weight = p.weight;
-            });
-            SEND_INLINE_ACTION(*this, makerpoolrec, {_self, "active"_n}, {miner, {*p_iter} });
-        }
-    } else {
-        // reset
-        sub_stats(iter->total_staked);
-        add_stats(total_staked);
-        maker_tbl.modify(iter, system_account, [&](auto& m) {
-            m.current_rate = current_rate;
-            m.miner_rate = miner_rate;
-            m.total_weight = total_weight;
-            m.total_staked = total_staked;
-            m.benchmark_stake_rate = benchmark_stake_rate;
-        });
-        SEND_INLINE_ACTION(*this, makerecord, {_self, "active"_n}, {*iter});
-        for(auto p_iter = dmc_pool.begin(); p_iter != dmc_pool.end();) {
-            p_iter = dmc_pool.erase(p_iter);
-        }
-        for (auto& p : poolholder) {
-            p_iter = dmc_pool.emplace(system_account, [&](auto& x) {
-                x.owner = p.owner;
-                x.weight = p.weight;
-            });
-            SEND_INLINE_ACTION(*this, makerpoolrec, {_self, "active"_n}, {miner, {*p_iter} });
-        }
-    }
-}
-
-// delete it after
-void token::initprice(double avg_price, double total_price, std::vector<price_history> price_detail) {
-    require_auth(system_account);
-    price_table ptb(get_self(), get_self().value);
-    avg_table atb(get_self(), get_self().value);
-    for (const auto& p : price_detail) {
-        ptb.emplace(_self, [&](auto& x) {
-            x.primary = ptb.available_primary_key();
-            x.bill_id = p.bill_id;
-            x.price = p.price;
-            x.created_at = p.created_at;
-        });
-    }
-
-    atb.emplace(_self, [&](auto& a) {
-        a.primary = 0;
-        a.total = total_price;
-        a.count = price_detail.size();
-        a.avg = avg_price;
-    });
 }
 }  // namespace eosio
