@@ -322,6 +322,7 @@ void token::paychallenge(name sender, uint64_t order_id)
          order_info.deposit = extended_asset(0, order_info.deposit.get_extended_symbol());
     }
     SEND_INLINE_ACTION(*this, assetrec, { _self, "active"_n }, { order_id, { miner_arbitration - system_reward }, order_info.user, AssetReceiptPayChallenge});
+    delete_order_pst(order_info);
     order_info.miner_lock_dmc = extended_asset(0, dmc_sym);
     order_info.lock_pledge -= order_info.price;
     order_info.user_pledge += challenge_iter->user_lock + order_info.price;
@@ -348,6 +349,7 @@ void token::paychallenge(name sender, uint64_t order_id)
     if (deleted) {
         order_tbl.erase(order_iter);
         challenge_tbl.erase(challenge_iter);
+        delete_maker_snapshot(order_id);
     } else {
         order_tbl.modify(order_iter, sender, [&](auto& o) {
             o = order_info;
