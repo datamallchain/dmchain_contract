@@ -7,6 +7,14 @@
 
 namespace eosio {
 
+void token::delete_order_pst(const dmc_order& order) {
+    if (get_dmc_config("deletepstid"_n, default_id_start) > order.order_id ) {
+        return;
+    }
+    lock_sub_balance(order.miner, order.miner_lock_pst, time_point_sec(uint32_max));
+    send_totalvote_to_system(order.miner);
+}
+
 void token::update_order_asset(dmc_order& order, OrderState new_state, uint64_t claims_interval) {
     maker_snapshot_table  maker_snapshot_tbl(get_self(), get_self().value);
     auto iter = maker_snapshot_tbl.find(order.order_id);
@@ -15,8 +23,8 @@ void token::update_order_asset(dmc_order& order, OrderState new_state, uint64_t 
     auto miner_rsi_total = extended_asset(round(user_rsi.quantity.amount * (1 + iter->rate / 100.0)), rsi_sym);
     auto dmc_pledge = extended_asset(order.price.quantity.amount / 2, (order.price.get_extended_symbol()));
     auto miner_rsi_pledge = extended_asset(miner_rsi_total.quantity.amount / 2, (miner_rsi_total.get_extended_symbol()));
-    SEND_INLINE_ACTION(*this, orderassrec, { _self, "active"_n }, { order.order_id, { {miner_rsi_pledge, OrderReceiptReward}, {dmc_pledge, OrderReceiptClaim}}, order.miner, ACC_TYPE_MINER, order.latest_settlement_date});
-    SEND_INLINE_ACTION(*this, orderassrec, { _self, "active"_n }, { order.order_id, { {user_rsi, OrderReceiptReward} }, order.user,  ACC_TYPE_USER, order.latest_settlement_date});
+    // SEND_INLINE_ACTION(*this, orderassrec, { _self, "active"_n }, { order.order_id, { {miner_rsi_pledge, OrderReceiptReward}, {dmc_pledge, OrderReceiptClaim}}, order.miner, ACC_TYPE_MINER, order.latest_settlement_date});
+    // SEND_INLINE_ACTION(*this, orderassrec, { _self, "active"_n }, { order.order_id, { {user_rsi, OrderReceiptReward} }, order.user,  ACC_TYPE_USER, order.latest_settlement_date});
 
     order.lock_pledge -= dmc_pledge;
     order.settlement_pledge += dmc_pledge;
@@ -30,7 +38,7 @@ void token::update_order_asset(dmc_order& order, OrderState new_state, uint64_t 
 void token::change_order(dmc_order& order, const dmc_challenge& challenge, time_point_sec current, uint64_t claims_interval, name payer)
 {
     extended_asset zero_dmc = extended_asset(0, dmc_sym);
-    if (!is_challenge_end(challenge.state)) {
+    if ((!is_challenge_end(challenge.state)) && (challenge.state != ChallengeTimeout)) {
         return;
     }
     if (order.state == OrderStateWaiting) {
@@ -69,6 +77,7 @@ void token::change_order(dmc_order& order, const dmc_challenge& challenge, time_
         update_order_asset(order, OrderStateEnd, claims_interval);
         std::vector<asset_type_args> rewards;
         rewards.push_back({order.miner_lock_dmc, AssetReceiptMinerLock});
+        delete_order_pst(order);
         if (order.deposit.quantity.amount > 0) {
             if (order.deposit_valid > order.latest_settlement_date) {
                 rewards.push_back({order.deposit, AssetReceiptDeposit});
@@ -87,6 +96,7 @@ void token::change_order(dmc_order& order, const dmc_challenge& challenge, time_
         update_order_asset(order, OrderStateCancel, claims_interval);
         std::vector<asset_type_args> rewards;
         rewards.push_back({order.miner_lock_dmc, AssetReceiptMinerLock});
+        delete_order_pst(order);
         if (order.deposit.quantity.amount > 0) {
             if (order.deposit_valid > order.latest_settlement_date) {
                 rewards.push_back({order.deposit, AssetReceiptDeposit});
@@ -183,6 +193,14 @@ void token::generate_maker_snapshot(uint64_t order_id, uint64_t bill_id, name mi
     SEND_INLINE_ACTION(*this, makersnaprec, { _self, "active"_n }, { snapshot_info });
     if(reset) {
         SEND_INLINE_ACTION(*this, makerpoolrec, {_self, "active"_n}, {miner, changed});
+    }
+}
+
+void token::delete_maker_snapshot(uint64_t order_id) {
+    maker_snapshot_table  maker_snapshot_tbl(get_self(), get_self().value);
+    auto snapshot_iter = maker_snapshot_tbl.find(order_id);
+    if (snapshot_iter != maker_snapshot_tbl.end()) {
+        maker_snapshot_tbl.erase(snapshot_iter);
     }
 }
 
@@ -371,6 +389,7 @@ void token::claimorder(name payer, uint64_t order_id)
     if (deleted) {
         order_tbl.erase(order_iter);
         challenge_tbl.erase(challenge_iter);
+        delete_maker_snapshot(order_id);
     } else {
         order_tbl.modify(order_iter, payer, [&](auto& o) {
             o = order_info;
@@ -457,6 +476,7 @@ void token::cancelorder(name sender, uint64_t order_id) {
         order_info.state = OrderStateCancel;
         challenge_info.state = ChallengeCancel;
         distribute_lp_pool(order_info.order_id, {{order_info.miner_lock_dmc, AssetReceiptMinerLock}}, extended_asset(0, dmc_sym), get_self());
+        delete_order_pst(order_info);
         add_balance(order_info.user, order_info.lock_pledge + order_info.user_pledge + order_info.deposit, sender);
         SEND_INLINE_ACTION(*this, assetrec, { _self, "active"_n },
         { order_id, { order_info.lock_pledge, order_info.user_pledge, order_info.deposit }, order_info.user, AssetReceiptCancel});
@@ -476,6 +496,7 @@ void token::cancelorder(name sender, uint64_t order_id) {
     if (deleted) {
         order_tbl.erase(order_iter);
         challenge_tbl.erase(challenge_iter);
+        delete_maker_snapshot(order_id);
     } else {
         order_tbl.modify(order_iter, sender, [&](auto& o) {
             o = order_info;
