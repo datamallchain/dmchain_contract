@@ -20,20 +20,8 @@ void token::exlock(name owner, extended_asset quantity, time_point_sec expiratio
     extended_symbol quantity_sym = quantity.get_extended_symbol();
     check(quantity_sym != pst_sym && quantity_sym != rsi_sym, "pst and rsi are not allowed to be locked");
 
-    stats statstable(_self, quantity.contract.value);
-    auto st = statstable.find(quantity.get_extended_symbol().get_symbol().code().raw());
-    check(st != statstable.end(), "token with symbol does not exist");
-
     sub_balance(owner, quantity);
-    lock_add_balance(owner, quantity, expiration, owner);
-
-    statstable.modify(st, get_self(), [&](auto& s) {
-        if (s.reserve_supply.symbol != s.supply.symbol)
-            s.reserve_supply = quantity.quantity;
-        else
-            s.reserve_supply += quantity.quantity;
-        s.supply -= quantity.quantity;
-    });
+    exchange_balance_to_lockbalance(owner, quantity, expiration,owner);
 }
 
 void token::exlocktrans(name from, name to, extended_asset quantity, time_point_sec expiration, time_point_sec expiration_to, string memo)
@@ -151,6 +139,22 @@ void token::lock_sub_balance(name foundation, extended_asset quantity, bool recu
             });
         }
     }
+}
+
+void token::exchange_balance_to_lockbalance(name owner, extended_asset value, time_point_sec lock_timestamp, name ram_payer)
+{
+    stats statstable(_self, value.contract.value);
+    auto st = statstable.find(value.get_extended_symbol().get_symbol().code().raw());
+    check(st != statstable.end(), "token with symbol does not exist");
+
+    lock_add_balance(owner, value, lock_timestamp, ram_payer);
+    statstable.modify(st, get_self(), [&](auto& s) {
+        if (s.reserve_supply.symbol != s.supply.symbol)
+            s.reserve_supply = value.quantity;
+        else
+            s.reserve_supply += value.quantity;
+        s.supply -= value.quantity;
+    });
 }
 
 extended_asset token::get_balance(extended_asset quantity, name name)
