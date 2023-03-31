@@ -113,4 +113,13 @@ void token::dismakerec(uint64_t order_id, std::vector<asset_type_args> rewards, 
     require_auth(_self);
 }
 
+void token::allocrec(extended_asset quantity, AllocationType type)
+{
+    require_auth(_self);
+}
+
+void token::innerswaprec(extended_asset vrsi, extended_asset dmc)
+{
+    require_auth(_self);
+}
 }  // namespace eosio
