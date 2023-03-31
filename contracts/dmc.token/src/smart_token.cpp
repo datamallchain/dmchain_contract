@@ -51,8 +51,6 @@ void token::exissue(name to, extended_asset quantity, string memo)
 
     check(memo.size() <= 256, "memo has more than 256 bytes");
 
-    add_stats(quantity);
-
     add_balance(foundation, quantity, foundation);
 
     if (to != foundation) {
@@ -61,6 +59,8 @@ void token::exissue(name to, extended_asset quantity, string memo)
 
     if (quantity.get_extended_symbol() == pst_sym)
         change_pst(to, quantity);
+    else
+        add_stats(quantity);
 }
 
 void token::extransfer(name from, name to, extended_asset quantity, string memo)
@@ -112,17 +112,17 @@ void token::exretire(name from, extended_asset quantity, string memo)
 
     sub_balance(from, quantity);
 
-    sub_stats(quantity);
-
     if (quantity.get_extended_symbol() == pst_sym) {
         change_pst(from, -quantity);
-        dmc_makers maker_tbl( get_self(), get_self().value);
+        dmc_makers maker_tbl(get_self(), get_self().value);
         auto iter = maker_tbl.find(from.value);
         if (iter != maker_tbl.end()) {
             maker_tbl.modify(iter, get_self(), [&](auto& m) {
                 m.current_rate = cal_current_rate(iter->total_staked, from, iter->get_real_m());
             });
         }
+    } else {
+        sub_stats(quantity);
     }
 }
 
@@ -174,7 +174,8 @@ void token::add_balance(name owner, extended_asset value, name ram_payer)
     }
 }
 
-void token::change_pst(name owner, extended_asset value)
+// the lock parameter is used to delay notification to the system
+void token::change_pst(name owner, extended_asset value, bool lock) 
 {
     pststats pst_acnts(get_self(), get_self().value);
     auto st = pst_acnts.find(owner.value);
@@ -188,11 +189,34 @@ void token::change_pst(name owner, extended_asset value)
             i.amount = value;
         });
     }
+
     check(st->amount.quantity.amount >= 0, "overdrawn balance when change PST");
 
-    //  TODO: ADD GLOBAL SET
-    action({ _self, "active"_n }, "dmc"_n, "settotalvote"_n,
-        std::make_tuple(owner, st->amount.quantity.amount))
+    if (value.quantity.amount >= 0) {
+        add_stats(value);
+    } else {
+        sub_stats(-value);
+        if (lock) {
+            lock_add_balance(owner, -value, time_point_sec(uint32_max), _self);
+        }
+    }
+
+    send_totalvote_to_system(owner);
+}
+
+void token::send_totalvote_to_system(name owner) 
+{
+    pststats pst_acnts(get_self(), get_self().value);
+    auto st = pst_acnts.find(owner.value);
+    auto balance = st == pst_acnts.end() ? 0 : st->amount.quantity.amount;
+
+    lock_accounts from_acnts(_self, owner.value);
+    auto from_iter = from_acnts.get_index<"byextendedas"_n>();
+    auto from = from_iter.find(lock_account::key(pst_sym, time_point_sec(uint32_max)));
+    auto locked_balance_amount = from == from_iter.end() ? 0 : from->balance.quantity.amount;
+
+    action({_self, "active"_n}, "dmc"_n, "settotalvote"_n,
+           std::make_tuple(owner, balance + locked_balance_amount))
         .send();
 }
 
