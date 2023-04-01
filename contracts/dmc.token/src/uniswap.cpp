@@ -335,6 +335,10 @@ extended_asset token::allocation_abo(time_point_sec now_time) {
         }
     }
 
+    if (to_user.quantity.amount > 0) {
+        add_stats(to_user);
+        SEND_INLINE_ACTION(*this, allocrec, {_self, "active"_n}, {to_user, AllocationAbo});
+    }
     return to_user;
 }
 
@@ -362,6 +366,7 @@ extended_asset token::allocation_penalty(time_point_sec now_time)
             break;
         }
     }
+    SEND_INLINE_ACTION(*this, allocrec, { _self, "active"_n }, { to_penalty, AllocationPenalty });
     return to_penalty;
 }
 
@@ -473,7 +478,7 @@ extended_asset token::exchange_from_uniswap(extended_asset add_balance)
         m.tokenx = rsi_quantity;
         m.tokeny = dmc_quantity;
     });
-
+    SEND_INLINE_ACTION(*this, innerswaprec, { {get_self(), "active"_n} }, { add_balance, to_user });
     return to_user;
 }
 
