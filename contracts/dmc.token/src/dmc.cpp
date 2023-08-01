@@ -183,7 +183,8 @@ void token::order(name owner, uint64_t bill_id, uint64_t benchmark_price, PriceR
     if (r > maker_iter->benchmark_stake_rate * 5) {
         r = maker_iter->benchmark_stake_rate * 5;
     }
-    auto miner_lock_dmc = extended_asset(user_to_pay.quantity.amount * (r / 100.0), user_to_pay.get_extended_symbol());
+    auto lock_price = price > current_price ? price : current_price;
+    extended_asset miner_lock_dmc = get_asset_by_amount<double, std::round>(lock_price * asset.quantity.amount * (r / 100.0), dmc_sym);
     check(maker_iter->total_staked >= miner_lock_dmc, "not enough stake quantity");
     dmc_order order_info = {
         .order_id = order_id,
