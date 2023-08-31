@@ -458,9 +458,12 @@ void token::subordasset(name sender, uint64_t order_id, extended_asset quantity)
 
 void token::cancelorder(name sender, uint64_t order_id) {
     require_auth(sender);
+
     dmc_orders order_tbl(get_self(), get_self().value);
     auto order_iter = order_tbl.find(order_id);
     check(order_iter != order_tbl.end(), "can't find order");
+    check(order_iter->miner == sender || order_iter->user == sender, "only miner or user can cancel order");
+    
     dmc_challenges challenge_tbl(get_self(), get_self().value);
     auto challenge_iter = challenge_tbl.find(order_id);
     check(challenge_iter != challenge_tbl.end(), "can't find challenge");
